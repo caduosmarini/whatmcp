@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  No external resources of any kind. This page renders nine years of private
+  messages; a CDN font or script would hand a third party a log of when you read
+  your own archive, and a compromised one would hand them the archive itself.
+-->
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'none'">
+<title>WhatMCP</title>
+<style>
+  :root {
+    --bg: #fbfbfa; --panel: #fff; --ink: #1c1c1a; --muted: #6b6b66;
+    --line: #e4e4e0; --accent: #1a7f5a; --warn: #a8631b; --bad: #b0392c;
+    --chip: #f0f0ec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16171a; --panel: #1d1f23; --ink: #e8e8e4; --muted: #969691;
+      --line: #2c2f34; --accent: #4cc38a; --warn: #d9924a; --bad: #e5705f;
+      --chip: #24272c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 ui-sans-serif, -apple-system, system-ui, sans-serif;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 28px 20px 80px; }
+  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 13px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+  .bar {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    margin: 18px 0 22px; padding: 14px 16px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  }
+  .grow { flex: 1; min-width: 200px; }
+  .badge {
+    display: inline-block; padding: 3px 9px; border-radius: 999px;
+    font-size: 12px; font-weight: 600; background: var(--chip); color: var(--muted);
+  }
+  .badge.ok { color: var(--accent); }
+  .badge.warn { color: var(--warn); }
+  .badge.bad { color: var(--bad); }
+
+  button {
+    font: inherit; font-weight: 550; cursor: pointer; color: var(--ink);
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px 14px;
+  }
+  button:hover:not(:disabled) { border-color: var(--muted); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  input[type=text], input[type=password] {
+    font: inherit; color: var(--ink); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; width: 100%;
+  }
+  input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 14px 16px;
+  }
+  .card .n { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; }
+  .card .k { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+
+  h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.05em;
+       color: var(--muted); margin: 30px 0 12px; font-weight: 600; }
+
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  .row { padding: 11px 16px; border-top: 1px solid var(--line); display: flex; gap: 12px; align-items: baseline; }
+  .row:first-child { border-top: none; }
+  .row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
+
+  .hit { padding: 14px 16px; border-top: 1px solid var(--line); }
+  .hit:first-child { border-top: none; }
+  .hit .head { display: flex; gap: 10px; align-items: baseline; margin-bottom: 7px; flex-wrap: wrap; }
+  .hit .chat { font-weight: 600; }
+  .hit .prov { color: var(--muted); font-size: 11px; }
+  .hit pre {
+    margin: 0; white-space: pre-wrap; word-break: break-word;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px;
+    color: var(--ink); max-height: 15em; overflow: auto;
+  }
+  .fenced { border-left: 3px solid var(--line); padding-left: 12px; }
+
+  #log {
+    margin-top: 12px; padding: 12px 16px; border-radius: 10px;
+    background: var(--panel); border: 1px solid var(--line);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12.5px; white-space: pre-wrap; max-height: 260px; overflow: auto;
+  }
+  .hide { display: none !important; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 720px) { .cols { grid-template-columns: 1fr; } }
+
+  .login { max-width: 420px; margin: 12vh auto; }
+  .note { color: var(--muted); font-size: 12.5px; margin-top: 10px; }
+  .err { color: var(--bad); font-size: 13px; margin-top: 10px; }
+</style>
+</head>
+<body>
+
+<!-- login ------------------------------------------------------------------ -->
+<div id="login" class="wrap login hide">
+  <h1>WhatMCP</h1>
+  <p class="sub">Paste the bearer token to unlock this archive.</p>
+  <form id="loginForm" style="margin-top:16px">
+    <input type="password" id="token" placeholder="bearer token" autocomplete="off" autofocus>
+    <button class="primary" type="submit" style="margin-top:10px; width:100%">Unlock</button>
+  </form>
+  <div id="loginErr" class="err hide"></div>
+  <p class="note">
+    Generate one with <span class="mono">npm run wa -- http-token</span>.
+    The session cookie is HttpOnly and SameSite=Strict, and this page is bound to
+    loopback only.
+  </p>
+</div>
+
+<!-- dashboard -------------------------------------------------------------- -->
+<div id="app" class="wrap hide">
+  <header>
+    <h1>WhatMCP</h1>
+    <span class="sub mono" id="storePath"></span>
+  </header>
+  <div class="sub">Local archive of your WhatsApp history — read-only.</div>
+
+  <div class="bar">
+    <div class="grow">
+      <span id="freshBadge" class="badge">checking…</span>
+      <span class="sub" id="freshText" style="margin-left:8px"></span>
+    </div>
+    <button id="syncBtn" class="primary">Sync now</button>
+    <button id="syncFullBtn" title="Re-read the entire WhatsApp store. Never deletes archived messages.">Full re-read</button>
+    <button id="logoutBtn">Lock</button>
+  </div>
+
+  <div id="log" class="hide"></div>
+
+  <div class="cards" id="cards"></div>
+
+  <h2>Search</h2>
+  <div class="bar" style="margin-top:0">
+    <div class="grow"><input type="text" id="q" placeholder="Search by meaning or keyword — try an English question about a Portuguese chat"></div>
+    <button id="searchBtn" class="primary">Search</button>
+  </div>
+  <div id="searchMeta" class="sub" style="margin:-10px 0 10px"></div>
+  <div id="results" class="panel hide"></div>
+
+  <div class="cols">
+    <div>
+      <h2>Busiest chats</h2>
+      <div id="chats" class="panel"></div>
+    </div>
+    <div>
+      <h2>Most active people</h2>
+      <div id="people" class="panel"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  /*
+   * Every value rendered below originates in a WhatsApp message, which is to say
+   * it is attacker-controlled: anyone who knows the phone number can put arbitrary
+   * text into this archive, including markup. So this file never assigns data to
+   * innerHTML. `el` builds nodes and sets textContent, which cannot execute.
+   */
+  function el(tag, cls, txt) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (txt !== undefined && txt !== null) n.textContent = String(txt);
+    return n;
+  }
+  function clear(n) { while (n.firstChild) n.removeChild(n.firstChild); }
+  function $(id) { return document.getElementById(id); }
+
+  function api(path, opts) {
+    opts = opts || {};
+    opts.credentials = 'same-origin';
+    // A custom header cannot be set by a cross-origin form or image; combined with
+    // the SameSite=Strict cookie this is belt and braces against CSRF.
+    opts.headers = Object.assign({ 'X-WhatMCP': '1' }, opts.headers || {});
+    return fetch(path, opts);
+  }
+
+  function nfmt(n) { return Number(n).toLocaleString(); }
+  function dayOf(ts) { return ts ? new Date(ts * 1000).toISOString().slice(0, 10) : '—'; }
+
+  // --- auth ----------------------------------------------------------------
+
+  function showLogin(msg) {
+    $('app').classList.add('hide');
+    $('login').classList.remove('hide');
+    if (msg) { $('loginErr').textContent = msg; $('loginErr').classList.remove('hide'); }
+  }
+  function showApp() {
+    $('login').classList.add('hide');
+    $('app').classList.remove('hide');
+    refresh();
+  }
+
+  $('loginForm').addEventListener('submit', function (e) {
+    e.preventDefault();
+    $('loginErr').classList.add('hide');
+    api('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: $('token').value.trim() }),
+    }).then(function (r) {
+      if (r.ok) { $('token').value = ''; showApp(); }
+      else showLogin('That token was not accepted.');
+    }).catch(function () { showLogin('Could not reach the server.'); });
+  });
+
+  $('logoutBtn').addEventListener('click', function () {
+    api('/api/logout', { method: 'POST' }).then(function () { location.reload(); });
+  });
+
+  // --- stats ---------------------------------------------------------------
+
+  function renderCards(s) {
+    var pct = s.windows ? Math.round((s.embedded / s.windows) * 100) : 0;
+    var defs = [
+      ['messages', nfmt(s.messages)],
+      ['chats', nfmt(s.threads)],
+      ['people', nfmt(s.senders)],
+      ['windows', nfmt(s.windows)],
+      ['embedded', pct + '%'],
+      ['span', dayOf(s.earliest).slice(0, 4) + '–' + dayOf(s.latest).slice(0, 4)]
+    ];
+    var host = $('cards');
+    clear(host);
+    defs.forEach(function (d) {
+      var c = el('div', 'card');
+      c.appendChild(el('div', 'n', d[1]));
+      c.appendChild(el('div', 'k', d[0]));
+      host.appendChild(c);
+    });
+  }
+
+  function renderFreshness(f) {
+    var b = $('freshBadge');
+    b.className = 'badge ' + (f.state === 'current' ? 'ok' : f.state === 'never' ? 'bad' : 'warn');
+    b.textContent = f.state === 'current' ? 'up to date'
+                  : f.state === 'never' ? 'never synced' : 'behind';
+    $('freshText').textContent = f.detail;
+  }
+
+  function renderList(host, rows) {
+    clear(host);
+    if (!rows.length) { host.appendChild(el('div', 'row', 'nothing yet')); return; }
+    rows.forEach(function (r) {
+      var row = el('div', 'row');
+      row.appendChild(el('div', 'name', r.name));
+      row.appendChild(el('div', 'meta', r.meta));
+      host.appendChild(row);
+    });
+  }
+
+  function refresh() {
+    api('/api/stats').then(function (r) {
+      if (r.status === 401) { showLogin(); return null; }
+      return r.json();
+    }).then(function (d) {
+      if (!d) return;
+      if (!d.ok) { $('freshText').textContent = d.error || 'archive not built'; return; }
+      $('storePath').textContent = d.store;
+      renderCards(d.stats);
+      renderFreshness(d.freshness);
+      renderList($('chats'), d.chats.map(function (c) {
+        return { name: c.title || c.id, meta: nfmt(c.msg_count) + ' · ' + dayOf(c.last_ts) };
+      }));
+      renderList($('people'), d.people.map(function (p) {
+        return { name: p.display_name || p.sender_id, meta: nfmt(p.msg_count) + ' · ' + p.thread_count + ' chats' };
+      }));
+    }).catch(function (e) { $('freshText').textContent = 'error: ' + e.message; });
+  }
+
+  // --- sync ----------------------------------------------------------------
+
+  function runSync(full) {
+    var log = $('log');
+    log.classList.remove('hide');
+    log.textContent = 'starting…\n';
+    $('syncBtn').disabled = true;
+    $('syncFullBtn').disabled = true;
+
+    api('/api/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ full: !!full })
+    }).then(function (res) {
+      if (res.status === 409) { log.textContent += 'a sync is already running\n'; throw new Error('busy'); }
+      if (res.status === 401) { showLogin(); throw new Error('auth'); }
+      // Progress arrives as newline-delimited JSON on the open response body, so a
+      // long first-run embed reports as it goes rather than looking hung.
+      var reader = res.body.getReader();
+      var dec = new TextDecoder();
+      var buf = '';
+      function pump() {
+        return reader.read().then(function (x) {
+          if (x.done) return;
+          buf += dec.decode(x.value, { stream: true });
+          var lines = buf.split('\n');
+          buf = lines.pop();
+          lines.forEach(function (line) {
+            if (!line.trim()) return;
+            var ev;
+            try { ev = JSON.parse(line); } catch (e) { return; }
+            log.textContent += (ev.msg || JSON.stringify(ev)) + '\n';
+            log.scrollTop = log.scrollHeight;
+          });
+          return pump();
+        });
+      }
+      return pump();
+    }).then(function () {
+      refresh();
+    }).catch(function (e) {
+      if (e.message !== 'busy' && e.message !== 'auth') log.textContent += 'failed: ' + e.message + '\n';
+    }).then(function () {
+      $('syncBtn').disabled = false;
+      $('syncFullBtn').disabled = false;
+    });
+  }
+
+  $('syncBtn').addEventListener('click', function () { runSync(false); });
+  $('syncFullBtn').addEventListener('click', function () { runSync(true); });
+
+  // --- search --------------------------------------------------------------
+
+  function renderHits(d) {
+    var host = $('results');
+    clear(host);
+    host.classList.remove('hide');
+
+    if (!d.hits.length) {
+      host.appendChild(el('div', 'hit', 'No matches. ' + (d.degraded || '')));
+      return;
+    }
+    d.hits.forEach(function (h) {
+      var box = el('div', 'hit');
+      var head = el('div', 'head');
+      head.appendChild(el('span', 'chat', h.thread_title || h.thread_id));
+      head.appendChild(el('span', 'badge ' + (h.strong ? 'ok' : 'warn'), h.strong ? 'strong' : 'weak'));
+      head.appendChild(el('span', 'prov',
+        new Date(h.start_ts * 1000).toISOString().slice(0, 16).replace('T', ' ') +
+        '  ·  bm25 ' + (h.bm25_rank || '—') +
+        '  ·  vec ' + (h.vec_rank || '—') +
+        (h.vec_sim != null ? ' (' + h.vec_sim.toFixed(3) + ')' : '') +
+        '  ·  cov ' + (h.term_coverage != null ? h.term_coverage.toFixed(2) : '—')));
+      box.appendChild(head);
+      // textContent, never innerHTML — this is third-party message text.
+      box.appendChild(el('pre', 'fenced', h.text));
+      host.appendChild(box);
+    });
+  }
+
+  function doSearch() {
+    var q = $('q').value.trim();
+    if (!q) return;
+    $('searchMeta').textContent = 'searching…';
+    api('/api/search?q=' + encodeURIComponent(q)).then(function (r) {
+      if (r.status === 401) { showLogin(); return null; }
+      return r.json();
+    }).then(function (d) {
+      if (!d) return;
+      if (d.error) { $('searchMeta').textContent = d.error; return; }
+      $('searchMeta').textContent =
+        d.hits.length + ' result(s), ' + d.strongCount + ' strong' +
+        (d.strongCount === 0 && d.hits.length
+          ? ' — nothing here is corroborated; treat these as the closest available text, not answers.'
+          : '') +
+        (d.degraded ? '  ' + d.degraded : '');
+      renderHits(d);
+    }).catch(function (e) { $('searchMeta').textContent = 'error: ' + e.message; });
+  }
+
+  $('searchBtn').addEventListener('click', doSearch);
+  $('q').addEventListener('keydown', function (e) { if (e.key === 'Enter') doSearch(); });
+
+  // --- boot ----------------------------------------------------------------
+
+  api('/api/stats').then(function (r) {
+    if (r.status === 401) showLogin();
+    else showApp();
+  }).catch(function () { showLogin('Could not reach the server.'); });
+})();
+</script>
+</body>
+</html>

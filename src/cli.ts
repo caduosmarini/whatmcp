@@ -1,0 +1,398 @@
+#!/usr/bin/env node
+/** WhatMCP CLI — build the archive, inspect it, tune it. */
+
+import { runIndex } from './index/indexer.ts';
+import { embedMissing, vectorCoverage, type ProgressEvent } from './index/embed.ts';
+import { modelTag, embed as apiEmbed } from './index/openai.ts';
+import {
+  searchHybrid, listThreads, listPeople, getConversation, stats,
+  type SearchContext,
+} from './search/search.ts';
+import { openStore } from './db/index.ts';
+import { getStore } from './store.ts';
+import { topKCosine } from './search/vectors.ts';
+import * as wa from './whatsapp/source.ts';
+import {
+  loadConfig, embedConfig, writeFileConfig, maskKey, requireKey,
+  CONFIG_PATH, DATA_DIR, ensureDataDir,
+} from './config.ts';
+import { existsSync, statSync, rmSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { dirname } from 'node:path';
+
+const argv = process.argv.slice(2);
+const [cmd, ...rest] = argv;
+const flag = (name: string) => rest.includes(`--${name}`);
+const flagValue = (name: string, fallback?: string) => {
+  const hit = rest.find((a) => a.startsWith(`--${name}=`));
+  return hit ? hit.slice(name.length + 3) : fallback;
+};
+const positional = rest.filter((a) => !a.startsWith('--'));
+
+const fmtTs = (ts: number) =>
+  ts ? new Date(ts * 1000).toISOString().slice(0, 16).replace('T', ' ') : 'never';
+const fmtBytes = (n: number) => `${(n / 1024 / 1024).toFixed(1)} MB`;
+const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
+const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
+
+function onProgress(e: ProgressEvent) {
+  if (e.phase === 'start') {
+    if (e.pending === 0) {
+      console.log(`  all ${e.total} window(s) already embedded with ${e.model}`);
+      return;
+    }
+    console.log(
+      `  ${e.pending} window(s) to embed with ${e.model}\n` +
+        `  ~${e.estTokens.toLocaleString()} tokens, est. $${e.estCostUSD.toFixed(4)}`,
+    );
+  } else if (e.phase === 'progress') {
+    const eta = e.etaMs > 0 ? `  eta ${Math.ceil(e.etaMs / 1000)}s` : '';
+    process.stdout.write(`\r  ${e.done}/${e.pending}  ${e.rate}/s${eta}      `);
+  } else if (e.phase === 'warn') {
+    console.log(`\n  warn: ${e.code} ${e.detail}`);
+  } else if (e.phase === 'done' && e.embedded > 0) {
+    process.stdout.write('\r');
+    console.log(
+      `  embedded ${e.embedded} in ${(e.elapsedMs / 1000).toFixed(1)}s, ` +
+        `${e.tokens.toLocaleString()} tokens, $${e.costUSD.toFixed(4)}` +
+        (e.truncated ? `  (${e.truncated} truncated)` : ''),
+    );
+  }
+}
+
+/**
+ * Search context that tolerates a missing API key.
+ *
+ * Only the vector arm needs the key; BM25, chats, people and doctor do not. Making
+ * every read path require one would mean a user cannot so much as list their chats
+ * before pasting a key — and doctor, whose entire job is to diagnose a missing key,
+ * would crash on it.
+ */
+function ctx(): SearchContext {
+  const cfg = loadConfig();
+  return {
+    storePath: cfg.store,
+    embedCfg: {
+      model: cfg.openaiModel,
+      dimensions: cfg.openaiDims,
+      apiKey: cfg.openaiKey ?? '',
+    },
+  };
+}
+
+switch (cmd) {
+  case 'set-key': {
+    const key = positional[0];
+    if (!key) {
+      console.error('usage: npm run wa -- set-key sk-...');
+      process.exit(1);
+    }
+    if (!key.startsWith('sk-')) {
+      console.error(`that does not look like an OpenAI key (expected it to start with "sk-")`);
+      process.exit(1);
+    }
+    ensureDataDir();
+    writeFileConfig({ openai_api_key: key });
+    console.log(`stored ${maskKey(key)} in ${CONFIG_PATH} (mode 0600)`);
+    break;
+  }
+
+  /*
+   * Generate the HTTP bearer token.
+   *
+   * 32 random bytes, base64url. Printed once here because it has to be pasted
+   * into a client, and stored 0600 — but it is never logged by the server itself.
+   */
+  case 'http-token': {
+    const token = randomBytes(32).toString('base64url');
+    writeFileConfig({ http_token: token });
+    console.log(token);
+    console.error(
+      `\nstored in ${CONFIG_PATH} (0600).\n` +
+        `This token grants full read access to your entire WhatsApp history.\n` +
+        `Treat it like a password, not an API key.`,
+    );
+    break;
+  }
+
+  case 'index': {
+    const cfg = loadConfig();
+    const t0 = Date.now();
+    const r = runIndex(cfg.store, {
+      chatstorage: cfg.chatstorage,
+      full: flag('full'),
+      onProgress: (m) => console.log(`  ${m}`),
+    });
+    console.log(
+      `${r.fullPass ? 'full' : 'incremental'} pass: scanned ${r.scanned}, ` +
+        `${r.newMessages} new, ${r.updatedMessages} updated\n` +
+        `  ${r.windowsBuilt} window(s) built, ${r.windowsDropped} replaced\n` +
+        `  ${r.totalMessages} message(s) archived, watermark Z_PK=${r.watermark}\n` +
+        `  ${((Date.now() - t0) / 1000).toFixed(1)}s -> ${cfg.store}`,
+    );
+    break;
+  }
+
+  case 'embed': {
+    const cfg = loadConfig();
+    const ec = embedConfig(cfg);
+    const limit = flagValue('limit');
+    await embedMissing(cfg.store, ec, {
+      onProgress,
+      limit: limit ? Number(limit) : undefined,
+      batchSize: Number(flagValue('batch', '128')),
+    });
+    const db = openStore(cfg.store);
+    const cov = vectorCoverage(db, ec);
+    db.close();
+    console.log(`  coverage: ${cov.embedded}/${cov.windows} (${cov.pct}%)`);
+    break;
+  }
+
+  case 'sync': {
+    const cfg = loadConfig();
+    // Fail before touching WhatsApp if the key is missing: a sync that indexes
+    // but cannot embed leaves the archive in a half-updated state that looks fine
+    // until someone runs a semantic query.
+    const ec = embedConfig(cfg);
+    const t0 = Date.now();
+    console.log(bold('indexing'));
+    const r = runIndex(cfg.store, {
+      chatstorage: cfg.chatstorage,
+      full: flag('full'),
+      onProgress: (m) => console.log(`  ${m}`),
+    });
+    console.log(
+      `  ${r.newMessages} new, ${r.updatedMessages} updated, ` +
+        `${r.windowsBuilt} window(s) built  (${r.totalMessages} archived)`,
+    );
+    console.log(bold('embedding'));
+    await embedMissing(cfg.store, ec, { onProgress });
+    const db = openStore(cfg.store);
+    const cov = vectorCoverage(db, ec);
+    db.close();
+    console.log(
+      `  coverage: ${cov.embedded}/${cov.windows} (${cov.pct}%)\n` +
+        `done in ${((Date.now() - t0) / 1000).toFixed(1)}s`,
+    );
+    break;
+  }
+
+  case 'search': {
+    const q = positional.join(' ');
+    if (!q) {
+      console.error('usage: npm run wa -- search <query> [--mode=hybrid|bm25|vector]');
+      process.exit(1);
+    }
+    const out = await searchHybrid(ctx(), {
+      query: q,
+      mode: flagValue('mode', 'hybrid') as any,
+      thread: flagValue('chat'),
+      sender: flagValue('sender'),
+      limit: Number(flagValue('limit', '10')),
+      minSim: loadConfig().minSim,
+      strongSim: loadConfig().strongSim,
+    });
+    if (out.degraded) console.log(dim(`! ${out.degraded}`));
+    if (out.hits.length === 0) {
+      console.log('no matches');
+      break;
+    }
+    console.log(
+      dim(`${out.hits.length} result(s), ${out.strongCount} strong\n`),
+    );
+    for (const h of out.hits) {
+      const prov =
+        `bm25 ${h.bm25_rank ?? '-'} | vec ${h.vec_rank ?? '-'}` +
+        (h.vec_sim != null ? ` (${h.vec_sim.toFixed(3)})` : '') +
+        ` | cov ${(h.term_coverage ?? 0).toFixed(2)}`;
+      console.log(
+        `${bold(h.thread_title ?? h.thread_id)}  ${fmtTs(h.start_ts)}  ` +
+          (h.strong ? '\x1b[32mstrong\x1b[0m' : '\x1b[33mweak\x1b[0m'),
+      );
+      console.log(dim(`  ${prov}`));
+      console.log(h.text.split('\n').map((l) => '  ' + l).join('\n') + '\n');
+    }
+    break;
+  }
+
+  case 'chats': {
+    for (const t of listThreads(ctx(), { query: positional.join(' ') || undefined, limit: 40 })) {
+      console.log(
+        `${String(t.msg_count).padStart(6)}  ${fmtTs(t.last_ts)}  ` +
+          `${t.kind.padEnd(5)}  ${t.title ?? t.id}`,
+      );
+    }
+    break;
+  }
+
+  case 'people': {
+    for (const p of listPeople(ctx(), { query: positional.join(' ') || undefined, limit: 40 })) {
+      console.log(
+        `${String(p.msg_count).padStart(6)}  ${(p.display_name ?? p.sender_id).padEnd(28)}  ` +
+          `${p.thread_count} chat(s)  ${fmtTs(p.first_ts).slice(0, 10)}..${fmtTs(p.last_ts).slice(0, 10)}`,
+      );
+    }
+    break;
+  }
+
+  case 'conversation': {
+    const [thread, around] = positional;
+    if (!thread) {
+      console.error('usage: npm run wa -- conversation <thread_id> [iso-date]');
+      process.exit(1);
+    }
+    const at = around ? Math.floor(new Date(around).getTime() / 1000) : undefined;
+    for (const m of getConversation(ctx(), { thread_id: thread, around_ts: at, limit: 80 })) {
+      console.log(`[${fmtTs(m.ts)}] ${m.sender_name}: ${m.text ?? `<${m.kind}>`}`);
+    }
+    break;
+  }
+
+  case 'doctor': {
+    const cfg = loadConfig();
+    console.log(bold('config'));
+    console.log(`  file:        ${CONFIG_PATH}${existsSync(CONFIG_PATH) ? '' : '  (absent)'}`);
+    console.log(`  openai key:  ${maskKey(cfg.openaiKey)}`);
+    console.log(`  model:       ${cfg.openaiModel} @ ${cfg.openaiDims} dims`);
+    console.log(
+      `  thresholds:  min_sim ${cfg.minSim ?? 'default'}, strong_sim ${cfg.strongSim ?? 'default'}` +
+        (cfg.strongSim === undefined ? dim('   (run: npm run wa -- calibrate)') : ''),
+    );
+
+    console.log(bold('\nwhatsapp source'));
+    const src = wa.sourceInfo(cfg.chatstorage);
+    if (!src.exists) {
+      console.log(`  \x1b[31mnot found\x1b[0m at ${cfg.chatstorage}`);
+      console.log('  Is WhatsApp Desktop installed and signed in on this Mac?');
+    } else {
+      console.log(`  path:     ${cfg.chatstorage}`);
+      console.log(`  size:     ${fmtBytes(src.size)}, modified ${fmtTs(src.mtime)}`);
+      let snap: string | null = null;
+      try {
+        snap = wa.snapshot(cfg.chatstorage);
+        const counts = wa.sourceCounts(snap);
+        console.log(`  readable: yes — ${counts.messages} message(s), max Z_PK ${counts.maxPk}`);
+      } catch (e) {
+        console.log(`  readable: \x1b[31mno\x1b[0m — ${(e as Error).message}`);
+        console.log(
+          '  macOS may be withholding Full Disk Access from the process running this.',
+        );
+      } finally {
+        // snapshot() copies ~47 MB into a temp dir; doctor is run repeatedly while
+        // troubleshooting, so leaving them behind would quietly fill /tmp.
+        if (snap) rmSync(dirname(snap), { recursive: true, force: true });
+      }
+    }
+
+    console.log(bold('\narchive'));
+    if (!existsSync(cfg.store)) {
+      console.log(`  none yet at ${cfg.store}`);
+      console.log('  build it:  npm run sync');
+    } else {
+      const s = stats(ctx());
+      console.log(`  path:      ${cfg.store} (${fmtBytes(statSync(cfg.store).size)})`);
+      console.log(`  messages:  ${s.messages}`);
+      console.log(`  chats:     ${s.threads}`);
+      console.log(`  people:    ${s.senders}`);
+      console.log(`  windows:   ${s.windows}`);
+      console.log(
+        `  embedded:  ${s.embedded}/${s.windows} ` +
+          `(${s.windows ? Math.round((s.embedded / s.windows) * 100) : 0}%) with ${s.model}`,
+      );
+      console.log(`  range:     ${fmtTs(s.earliest)} .. ${fmtTs(s.latest)}`);
+      console.log(`  last sync: ${fmtTs(s.last_sync_at)}`);
+    }
+    break;
+  }
+
+  /*
+   * Fit the similarity thresholds to THIS corpus and THIS model.
+   *
+   * Cosine similarity carries no absolute meaning across models: an E5 model puts
+   * unrelated text near 0.75, text-embedding-3-small near 0.10. Hard-coding either
+   * number breaks the other. Worse, it breaks quietly — too high a floor returns
+   * nothing from the vector arm and search degrades to keyword-only while still
+   * reporting results.
+   *
+   * The method needs no labelled data: embed queries about subjects guaranteed to
+   * be absent from a personal chat history, and measure how similar the corpus's
+   * *best* match to that nonsense is. That is the noise ceiling. A real hit scoring
+   * above it is evidence; anything below the nonsense mid-field is not worth
+   * returning at all.
+   */
+  case 'calibrate': {
+    const cfg = loadConfig();
+    const ec = embedConfig(cfg);
+    const store = getStore(cfg.store, modelTag(ec));
+    if (!store.vectors) {
+      console.error('no vectors in the archive yet — run: npm run wa -- sync');
+      process.exit(1);
+    }
+    const ix = store.vectors;
+
+    const NOISE = [
+      'lattice gauge theory in quantum chromodynamics',
+      'sourdough starter hydration ratio troubleshooting',
+      'Tokyo subway fare adjustment machine instructions',
+      'crop rotation practices in medieval Flanders',
+      'tuning valve clearance on a diesel tractor engine',
+      'Byzantine fault tolerance in distributed consensus',
+      'care instructions for a tropical saltwater reef aquarium',
+      'municipal zoning variance appeal procedure',
+    ];
+
+    console.log(`probing ${ix.n} vectors with ${NOISE.length} out-of-domain queries…`);
+    const top1: number[] = [];
+    const p100: number[] = [];
+    for (const q of NOISE) {
+      const { vectors } = await apiEmbed(ec, [q]);
+      const hits = topKCosine(ix, vectors[0], 100);
+      if (hits.length === 0) continue;
+      top1.push(hits[0].sim);
+      p100.push(hits[hits.length - 1].sim);
+      console.log(
+        `  ${hits[0].sim.toFixed(3)}  ${dim(hits[hits.length - 1].sim.toFixed(3))}  ${q}`,
+      );
+    }
+
+    const max = (a: number[]) => a.reduce((x, y) => Math.max(x, y), -Infinity);
+    const mean = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length;
+
+    // A hit must beat the best match nonsense could find before it counts as
+    // evidence on its own. The margin absorbs the fact that eight probes are a
+    // sample of the noise distribution, not the whole of it.
+    const strong = Number((max(top1) + 0.02).toFixed(3));
+    // The floor only removes the pathological tail: below the *typical* 100th
+    // result of a nonsense query, a window is not plausibly about anything asked.
+    const minSim = Number(mean(p100).toFixed(3));
+
+    console.log(
+      `\nnoise top-1:  max ${max(top1).toFixed(3)}  mean ${mean(top1).toFixed(3)}\n` +
+        `noise top-100: mean ${mean(p100).toFixed(3)}\n\n` +
+        `strong_sim -> ${strong}   (a hit above this beats anything nonsense retrieved)\n` +
+        `min_sim    -> ${minSim}   (floor; only drops the pathological tail)`,
+    );
+    writeFileConfig({ strong_sim: strong, min_sim: minSim });
+    console.log(`\nwritten to ${CONFIG_PATH}`);
+    break;
+  }
+
+  default:
+    console.log(`WhatMCP — local MCP server over your WhatsApp history
+
+  set-key sk-...            store the OpenAI API key (0600, never logged)
+  http-token                generate the HTTP bearer token (for npm run serve:http)
+  sync [--full]             index new messages, then embed anything missing
+  index [--full]            index only
+  embed [--limit=N]         embed only
+  calibrate                 fit similarity thresholds to this corpus
+  doctor                    config, source readability, archive coverage
+
+  search <query>            [--mode=hybrid|bm25|vector] [--chat=] [--sender=]
+  chats [filter]            chats by recency
+  people [filter]           people by message volume
+  conversation <id> [date]  dump one thread
+
+data dir: ${DATA_DIR}`);
+}
