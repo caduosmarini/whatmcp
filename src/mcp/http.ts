@@ -104,9 +104,31 @@ const allowedHosts = new Set(
 );
 if (!isLoopback) allowedHosts.add(HOST);
 
+/*
+ * Suffix matching exists for one specific case: a Cloudflare quick tunnel mints a
+ * new random `*.trycloudflare.com` hostname on every restart, so an exact
+ * allowlist would break on each reconnect and invite someone to "fix" it by
+ * disabling the check entirely.
+ *
+ * Be honest about what this costs. Allowing a suffix means any hostname under
+ * that domain passes the Host check, which weakens it as an anti-rebinding
+ * control for that domain. It is an acceptable trade only because a public
+ * tunnel already changes the threat model: the bearer token, not the Host header,
+ * is what stands between the internet and the archive. Never add a suffix for a
+ * domain you do not control the security properties of.
+ */
+const allowedSuffixes = (file.http_allowed_host_suffixes ?? []).map((s) => s.toLowerCase());
+
 function hostAllowed(req: express.Request): boolean {
-  const host = (req.get('host') ?? '').split(':')[0];
-  return allowedHosts.has(host) || allowedHosts.has(`[${host}]`);
+  const host = (req.get('host') ?? '').split(':')[0].toLowerCase();
+  if (allowedHosts.has(host) || allowedHosts.has(`[${host}]`)) return true;
+  return allowedSuffixes.some((sfx) => host.endsWith(sfx));
+}
+
+/** Did this request arrive on the loopback interface's own hostname? */
+export function isLoopbackHost(req: express.Request): boolean {
+  const host = (req.get('host') ?? '').split(':')[0].toLowerCase();
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]';
 }
 
 function originAllowed(req: express.Request): boolean {

@@ -194,19 +194,38 @@ would carry the bearer token and every message it returns in cleartext, readable
 by anything on the path. Keep it on loopback and put a tunnel in front:
 
 ```bash
-cloudflared tunnel --url http://127.0.0.1:8787     # or: tailscale funnel 8787
+brew install cloudflared
+bash deploy/install.sh      # two LaunchAgents: server + tunnel
+npm run wa -- url           # the current public URL
 ```
 
-Then add the tunnel's public hostname to `~/.whatmcp/config.json` so the Host
-check accepts it:
+`install.sh` is per-user and reversible — nothing needs sudo, nothing lands
+outside `~/Library/LaunchAgents` and `~/.whatmcp`, and `deploy/uninstall.sh`
+removes it without touching the archive.
 
-```json
-{ "http_allowed_hosts": ["your-tunnel.trycloudflare.com"] }
-```
+Three things it handles that are easy to miss:
 
-A tunnel gives you TLS, no inbound firewall hole, and a URL you can revoke by
-killing one process. If you bind a non-loopback address anyway, the server starts
-but prints a loud warning — it does not pretend that is a supported configuration.
+- **Sleep.** A sleeping Mac serves nothing, and this one sleeps after a minute.
+  The server runs under `caffeinate -is`, which needs no sudo but only covers AC
+  power. On battery macOS may still sleep; only `sudo pmset -b sleep 0` changes
+  that, and that one is yours to run.
+- **The dashboard does not go public.** A tunnel forwards to `127.0.0.1:8787`, so
+  everything on that port would otherwise be reachable from the internet the
+  moment it starts — including the login form. Dashboard routes require a
+  loopback `Host` header, so the tunnel's hostname gets a 404 while `/mcp` works.
+  Enforced in code, not by proxy configuration.
+- **The URL rotates.** A quick tunnel mints a new hostname on every reconnect,
+  which is why the Host check accepts the `.trycloudflare.com` suffix rather than
+  an exact name. For a stable hostname use a named tunnel (Cloudflare account
+  plus a domain) and put the exact host in `http_allowed_hosts` instead.
+
+A tunnel gives you TLS, no inbound firewall hole, and a URL you revoke by killing
+one process. If you bind a non-loopback address directly instead, the server
+starts but prints a loud warning — it does not pretend that is supported.
+
+Once public, **the bearer token is the only thing between the internet and the
+archive.** Rotate it with `npm run wa -- http-token` (restart the server after),
+and take the whole endpoint down with `bash deploy/uninstall.sh`.
 
 ## Tools
 

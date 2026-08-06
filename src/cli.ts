@@ -16,9 +16,9 @@ import {
   loadConfig, embedConfig, writeFileConfig, maskKey, requireKey,
   CONFIG_PATH, DATA_DIR, ensureDataDir,
 } from './config.ts';
-import { existsSync, statSync, rmSync } from 'node:fs';
+import { existsSync, statSync, rmSync, readFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 
 const argv = process.argv.slice(2);
 const [cmd, ...rest] = argv;
@@ -111,6 +111,35 @@ switch (cmd) {
       `\nstored in ${CONFIG_PATH} (0600).\n` +
         `This token grants full read access to your entire WhatsApp history.\n` +
         `Treat it like a password, not an API key.`,
+    );
+    break;
+  }
+
+  /*
+   * Print the current public tunnel URL.
+   *
+   * A Cloudflare quick tunnel mints a new random hostname on every reconnect and
+   * announces it only in its own log, so without this the URL is effectively
+   * unfindable after the terminal that started it is gone.
+   */
+  case 'url': {
+    const logPath = join(DATA_DIR, 'logs', 'tunnel.log');
+    if (!existsSync(logPath)) {
+      console.error(`no tunnel log at ${logPath} — is the tunnel running?`);
+      console.error('  launchctl print gui/$(id -u)/com.whatmcp.tunnel | head');
+      process.exit(1);
+    }
+    const found = readFileSync(logPath, 'utf8').match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/g);
+    if (!found?.length) {
+      console.error('no URL in the tunnel log yet; give it a few seconds and retry.');
+      process.exit(1);
+    }
+    // Last wins: earlier entries are hostnames from previous reconnects.
+    const url = found[found.length - 1];
+    console.log(`${url}/mcp`);
+    console.error(
+      `\nAuthorization: Bearer <token from ~/.whatmcp/config.json>\n` +
+        `This URL is public. The token is the only thing protecting the archive.`,
     );
     break;
   }
@@ -383,6 +412,7 @@ switch (cmd) {
 
   set-key sk-...            store the OpenAI API key (0600, never logged)
   http-token                generate the HTTP bearer token (for npm run serve:http)
+  url                       print the current public tunnel URL
   sync [--full]             index new messages, then embed anything missing
   index [--full]            index only
   embed [--limit=N]         embed only

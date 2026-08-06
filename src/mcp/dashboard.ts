@@ -94,6 +94,26 @@ export function mountDashboard(app: express.Express, deps: DashboardDeps): void 
     `http://localhost:${port}`,
   ]);
 
+  /**
+   * The dashboard is loopback-only, enforced here rather than by deployment.
+   *
+   * A tunnel forwards to 127.0.0.1:PORT, so everything bound to this port is
+   * reachable from the public internet the moment one is running — including a
+   * login form and a browser rendering path that were designed for a local-only
+   * threat model. Requiring the *Host header* to be loopback means the tunnel's
+   * own hostname fails this check, so /mcp stays remotely reachable while the
+   * dashboard does not, without depending on anyone configuring a proxy correctly.
+   */
+  function loopbackOnly(req: express.Request, res: express.Response): boolean {
+    const host = (req.get('host') ?? '').split(':')[0].toLowerCase();
+    const local = host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]';
+    if (!local) {
+      res.status(404).type('text').send('Not found.');
+      return false;
+    }
+    return true;
+  }
+
   /** Origin, if the browser sent one, must be this server. */
   function originOk(req: express.Request): boolean {
     const o = req.get('origin');
@@ -102,6 +122,7 @@ export function mountDashboard(app: express.Express, deps: DashboardDeps): void 
 
   /** Gate for every /api route except login. */
   function auth(req: express.Request, res: express.Response): boolean {
+    if (!loopbackOnly(req, res)) return false;
     if (!originOk(req)) {
       res.status(403).json({ error: 'bad origin' });
       return false;
@@ -120,11 +141,13 @@ export function mountDashboard(app: express.Express, deps: DashboardDeps): void 
     return true;
   }
 
-  app.get('/', (_req, res) => {
+  app.get('/', (req, res) => {
+    if (!loopbackOnly(req, res)) return;
     res.type('html').send(HTML);
   });
 
   app.post('/api/login', (req, res) => {
+    if (!loopbackOnly(req, res)) return;
     if (!originOk(req)) {
       res.status(403).json({ error: 'bad origin' });
       return;

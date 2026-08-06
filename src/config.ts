@@ -47,6 +47,8 @@ export interface FileConfig {
   http_host?: string;
   /** Extra Host header values to accept, for a tunnel's public hostname. */
   http_allowed_hosts?: string[];
+  /** Host suffixes to accept, e.g. ".trycloudflare.com" for rotating quick tunnels. */
+  http_allowed_host_suffixes?: string[];
   /** Browser origins to accept. Empty means "no browser may call this". */
   http_allowed_origins?: string[];
 }

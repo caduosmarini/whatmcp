@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Cloudflare quick tunnel as a user LaunchAgent.
+
+  A quick tunnel needs no Cloudflare account and no domain, at the cost of a
+  RANDOM HOSTNAME THAT CHANGES ON EVERY RESTART. That is why the server's Host
+  check is configured with a `.trycloudflare.com` suffix rather than an exact
+  name — an exact allowlist would break on each reconnect, and the tempting fix
+  for that is to disable the check, which is worse than the suffix.
+
+  Read the current URL with:  npm run wa -- url
+
+  For a stable hostname you need a named tunnel, which requires a Cloudflare
+  account and a domain:
+    cloudflared tunnel login
+    cloudflared tunnel create whatmcp
+    cloudflared tunnel route dns whatmcp whatmcp.yourdomain.com
+  then replace ProgramArguments with `tunnel run whatmcp` and put the exact
+  hostname in http_allowed_hosts instead of the suffix.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.whatmcp.tunnel</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__CLOUDFLARED__</string>
+    <string>tunnel</string>
+    <string>--no-autoupdate</string>
+    <string>--url</string>
+    <string>http://127.0.0.1:8787</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>__HOME__/.whatmcp/logs/tunnel.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/.whatmcp/logs/tunnel.log</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

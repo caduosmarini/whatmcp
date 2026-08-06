@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  WhatMCP HTTP server as a user LaunchAgent.
+
+  Two details are load-bearing:
+
+  1. The process is wrapped in `caffeinate -is`. This Mac is configured to sleep
+     after 1 minute, and a sleeping Mac serves nothing — a remote endpoint that
+     dies whenever you walk away is worse than no remote endpoint, because it
+     fails intermittently rather than obviously. `-i` prevents idle sleep and
+     `-s` prevents system sleep while on AC power; neither needs sudo. On battery
+     macOS may still sleep, which only `sudo pmset -b sleep 0` would change.
+
+  2. It stays bound to 127.0.0.1. The tunnel connects outward to Cloudflare and
+     forwards inward to loopback, so there is never a listening port on a public
+     interface and no firewall hole to open. Binding 0.0.0.0 here would add
+     exposure without adding capability.
+
+  Install:
+    cp deploy/com.whatmcp.server.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.whatmcp.server.plist
+  Reload after editing:
+    launchctl bootout gui/$(id -u)/com.whatmcp.server && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.whatmcp.server.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.whatmcp.server</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/caffeinate</string>
+    <string>-is</string>
+    <string>__NODE__</string>
+    <string>--experimental-sqlite</string>
+    <string>--experimental-strip-types</string>
+    <string>--no-warnings</string>
+    <string>__REPO__/src/mcp/http.ts</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+
+  <!-- Do not hammer the log if it crash-loops on a config error. -->
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>__HOME__/.whatmcp/logs/server.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/.whatmcp/logs/server.log</string>
+
+  <!--
+    No secrets here. The OpenAI key and bearer token are read from
+    ~/.whatmcp/config.json (0600). A plist in ~/Library/LaunchAgents is
+    world-readable by default, so putting them here would downgrade both.
+  -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>WHATMCP_HTTP_HOST</key>
+    <string>127.0.0.1</string>
+  </dict>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>
