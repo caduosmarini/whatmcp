@@ -227,6 +227,40 @@ Once public, **the bearer token is the only thing between the internet and the
 archive.** Rotate it with `npm run wa -- http-token` (restart the server after),
 and take the whole endpoint down with `bash deploy/uninstall.sh`.
 
+### ChatGPT
+
+ChatGPT refuses static bearer tokens: custom MCP connectors require OAuth with
+dynamic client registration and PKCE, and it will not do machine-to-machine
+grants. So the HTTP server ships an OAuth 2.1 authorization server
+(`src/mcp/oauth.ts`) alongside the static-token path, which keeps working
+unchanged for Claude Code and Claude Desktop.
+
+1. Get a **stable public hostname** — a rotating quick tunnel will not survive,
+   because a client registration is bound to fixed issuer and redirect URLs. Use a
+   named Cloudflare tunnel, then set `public_url` in `~/.whatmcp/config.json`.
+2. In ChatGPT: Settings → Connectors → Developer mode, add
+   `https://your-host/mcp`, and choose OAuth.
+3. ChatGPT registers itself, redirects you to `/authorize`, and you paste your
+   WhatMCP token to approve. It exchanges the code for an access token from then on.
+
+Inspect and revoke grants:
+
+```bash
+npm run wa -- oauth                    # registered clients, live token counts
+npm run wa -- oauth revoke <client_id> # kill every token for one client
+```
+
+The flow is standard and the guards are enforced, not assumed: PKCE S256 is
+mandatory (no `plain`), redirect URIs are matched exactly (prefix matching is how
+these become open redirects), codes are single-use with a 60-second TTL bound to
+client, redirect URI, challenge and resource, refresh tokens rotate on every use,
+and codes and tokens are stored only as SHA-256 hashes.
+
+One thing to be clear-eyed about: `/authorize` is a **public HTML form that
+accepts your archive token** — the only deliberately public browser surface here.
+It is rate-limited with exponential lockout and leaks nothing about the archive,
+but it exists, which is why the dashboard stays loopback-only.
+
 ## Tools
 
 | tool | purpose |

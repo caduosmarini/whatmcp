@@ -30,6 +30,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { loadConfig, embedConfig, readFileConfig, CONFIG_PATH } from '../config.ts';
 import { buildServer } from './tools.ts';
 import { mountDashboard } from './dashboard.ts';
+import { mountOAuth, validateAccessToken } from './oauth.ts';
 import { stats } from '../search/search.ts';
 import { existsSync } from 'node:fs';
 
@@ -41,6 +42,8 @@ const HOST = process.env.WHATMCP_HTTP_HOST ?? file.http_host ?? '127.0.0.1';
 const TOKEN = process.env.WHATMCP_HTTP_TOKEN ?? file.http_token ?? '';
 
 const isLoopback = HOST === '127.0.0.1' || HOST === '::1' || HOST === 'localhost';
+/** Set this once you have a stable hostname; derived per-request otherwise. */
+const PUBLIC_URL = (process.env.WHATMCP_PUBLIC_URL ?? file.public_url ?? '').replace(/\/+$/, '');
 
 /*
  * Refuse to start without a strong token.
@@ -79,12 +82,27 @@ try {
 
 const expected = Buffer.from(TOKEN);
 
+/**
+ * Two credentials are accepted, and the order matters.
+ *
+ * The static token is checked first because it is the fast path for Claude Code
+ * and Claude Desktop, which have used it since before OAuth existed here. OAuth
+ * access tokens are the ChatGPT path — ChatGPT refuses static bearer tokens
+ * outright, which is the entire reason the authorization server exists.
+ *
+ * Both land in the same Authorization: Bearer header, so this cannot be told
+ * apart by shape; it tries one, then the other.
+ */
 function authorized(req: express.Request): boolean {
   const header = req.get('authorization') ?? '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+  if (!token) return false;
+
   const got = Buffer.from(token);
   // Length check first: timingSafeEqual throws on mismatched lengths.
-  return got.length === expected.length && timingSafeEqual(got, expected);
+  if (got.length === expected.length && timingSafeEqual(got, expected)) return true;
+
+  return validateAccessToken(token) !== null;
 }
 
 /**
@@ -165,8 +183,18 @@ function guard(req: express.Request, res: express.Response): boolean {
     return false;
   }
   if (!authorized(req)) {
-    console.error(
-      `auth failure from ${req.ip} at ${new Date().toISOString()}`,
+    console.error(`auth failure from ${req.ip} at ${new Date().toISOString()}`);
+    /*
+     * RFC 9728: point the client at the protected-resource metadata. Without this
+     * header an MCP client that supports OAuth has no way to discover the
+     * authorization server and simply reports "unauthorized" with no path
+     * forward -- which is exactly how a working server looks broken.
+     */
+    const proto = (req.get('x-forwarded-proto') ?? req.protocol ?? 'http').split(',')[0].trim();
+    const origin = PUBLIC_URL || `${proto}://${req.get('host')}`;
+    res.setHeader(
+      'WWW-Authenticate',
+      `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource"`,
     );
     res.status(401).json({
       jsonrpc: '2.0',
@@ -258,6 +286,17 @@ app.delete('/mcp', methodNotAllowed);
  * browser always sends one. Two different clients, two different threat models,
  * two separate gates — sharing one would mean loosening the strict one.
  */
+/*
+ * OAuth, mounted before the dashboard.
+ *
+ * Unlike the dashboard, /authorize MUST be publicly reachable: ChatGPT redirects
+ * the user's own browser to it, and that browser resolves the tunnel hostname,
+ * not loopback. So this is a public HTML form -- the one deliberately public
+ * browser surface here -- and oauth.ts carries the rate limiting that makes that
+ * acceptable.
+ */
+mountOAuth(app, { token: TOKEN, publicUrl: PUBLIC_URL || undefined });
+
 if (process.env.WHATMCP_NO_DASHBOARD !== '1') {
   mountDashboard(app, { cfg, embedCfg, token: TOKEN, port: PORT });
 }
@@ -268,7 +307,14 @@ const server = app.listen(PORT, HOST, () => {
   console.error(`  auth:    bearer token required (${TOKEN.length} chars)`);
   console.error(`  hosts:   ${[...allowedHosts].join(', ')}`);
   if (process.env.WHATMCP_NO_DASHBOARD !== '1') {
-    console.error(`  dash:    http://${HOST}:${PORT}/`);
+    console.error(`  dash:    http://${HOST}:${PORT}/  (loopback only)`);
+  }
+  console.error(`  oauth:   /authorize /token /register  (public)`);
+  if (!PUBLIC_URL) {
+    console.error(
+      '           no public_url set - OAuth issuer is derived per request,\n' +
+      '           so a rotating tunnel hostname will invalidate registrations.',
+    );
   }
   if (keyError) console.error('  WARNING: no OpenAI key — semantic search disabled');
 

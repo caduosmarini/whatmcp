@@ -51,6 +51,12 @@ export interface FileConfig {
   http_allowed_host_suffixes?: string[];
   /** Browser origins to accept. Empty means "no browser may call this". */
   http_allowed_origins?: string[];
+  /**
+   * Stable public origin, e.g. https://whatmcp.example.com. OAuth issuer and
+   * redirect URLs are built from it. Leave unset only with a rotating tunnel,
+   * where it is derived per request instead.
+   */
+  public_url?: string;
 }
 
 export function ensureDataDir(): string {

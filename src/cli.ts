@@ -18,6 +18,7 @@ import {
 } from './config.ts';
 import { existsSync, statSync, rmSync, readFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
+import { listClients, revokeClient } from './mcp/oauth.ts';
 import { dirname, join } from 'node:path';
 
 const argv = process.argv.slice(2);
@@ -141,6 +142,42 @@ switch (cmd) {
       `\nAuthorization: Bearer <token from ~/.whatmcp/config.json>\n` +
         `This URL is public. The token is the only thing protecting the archive.`,
     );
+    break;
+  }
+
+  /*
+   * Inspect and revoke OAuth grants.
+   *
+   * Worth having as a first-class command: dynamic client registration means
+   * clients appear without you typing anything, so the only way to know who holds
+   * a live token is to ask.
+   */
+  case 'oauth': {
+    const sub = positional[0] ?? 'list';
+    if (sub === 'revoke') {
+      const target = positional[1];
+      const n = revokeClient(target);
+      console.log(
+        target
+          ? `revoked ${n} token(s) for ${target}`
+          : `revoked ${n} token(s) across all clients`,
+      );
+      console.log('restart the server so cached handles drop the revocations:');
+      console.log('  launchctl kickstart -k gui/$(id -u)/com.whatmcp.server');
+      break;
+    }
+    const clients = listClients();
+    if (clients.length === 0) {
+      console.log('no OAuth clients registered yet');
+      break;
+    }
+    for (const c of clients) {
+      console.log(
+        `${c.client_id}  ${String(c.name).padEnd(24)}  ` +
+          `${c.active} live token(s)  registered ${fmtTs(Math.floor(c.created_at / 1000))}`,
+      );
+    }
+    console.log('\nrevoke:  npm run wa -- oauth revoke [client_id]');
     break;
   }
 
@@ -413,6 +450,7 @@ switch (cmd) {
   set-key sk-...            store the OpenAI API key (0600, never logged)
   http-token                generate the HTTP bearer token (for npm run serve:http)
   url                       print the current public tunnel URL
+  oauth [revoke <id>]       list or revoke OAuth clients
   sync [--full]             index new messages, then embed anything missing
   index [--full]            index only
   embed [--limit=N]         embed only
