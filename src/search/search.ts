@@ -2,10 +2,10 @@
  * Retrieval over conversation windows.
  *
  * Hybrid: BM25 (FTS5) fused with dense vectors by rank. Neither arm suffices
- * alone — BM25 owns names, numbers, and the slang the encoder never saw ("vlw",
- * "qnd", "tp" subword-shatter into noise); vectors own paraphrase and
- * cross-lingual recall, so an English question can find a Portuguese
- * conversation. Metadata filters apply to both arms.
+ * alone — BM25 owns names, numbers, and the texting shorthand the encoder never
+ * saw ("idk", "ttyl", "lmk" subword-shatter into noise); vectors own paraphrase
+ * and cross-lingual recall, so a question asked in one language can find a
+ * conversation held in another. Metadata filters apply to both arms.
  *
  * The contract is retrieval-to-*navigate*, not retrieval-to-answer: search returns
  * windows with ids, and getConversation() expands any of them into the full
@@ -58,11 +58,11 @@ export const DEFAULT_MIN_SIM = 0.18;
 /**
  * Similarity at which a vector hit counts as evidence *on its own*.
  *
- * The important lesson, inherited from measuring this on a real bilingual corpus:
+ * The important lesson, from measuring this on a real multi-language corpus:
  * cosine similarity does not separate relevant from irrelevant in absolute terms
- * across queries. A real English question about a Portuguese chat can score below
- * outright nonsense, because both are "far from everything". Any single threshold
- * that blocks the nonsense also blocks the cross-lingual questions that are one of
+ * across queries. A genuine cross-language question can score below outright
+ * nonsense, because both are "far from everything". Any single threshold that
+ * blocks the nonsense also blocks the cross-language questions that are one of
  * the main reasons to have embeddings at all.
  *
  * So relevance is not decided by a threshold. Results are RETURNED but LABELLED: a
@@ -94,16 +94,22 @@ export interface Hit {
 }
 
 /**
- * Stopwords for the BM25 arm, Portuguese and English — the corpus is bilingual.
+ * Stopwords for the BM25 arm.
+ *
+ * English plus one additional language ship by default, because a stopword list
+ * only helps for languages it covers and most archives are not monolingual. The
+ * rest of the arm is language-agnostic: FTS5 tokenizes by Unicode rules, so
+ * search works in any language whether or not its function words are listed here.
+ * Add your own below if a language you use is over-matching.
  *
  * Motivated by measurement rather than tidiness: without this, BM25 answers every
- * query, because ORing every term means "alguém falou sobre dinheiro emprestado"
- * matches any window containing "falou". The top hit was "Ele falou sobre app".
- * That garbage then enters rank fusion as though it were signal. With the vector
- * arm covering recall, the BM25 arm should get *more* precise, not less.
+ * query, because ORing every term means "did anyone say something about the
+ * money I lent" matches any window containing "say". That garbage then enters
+ * rank fusion as though it were signal. With the vector arm covering recall, the
+ * BM25 arm should get *more* precise, not less.
  */
 const STOPWORDS = new Set([
-  // pt
+  // Additional-language function words (see note above).
   'a', 'o', 'as', 'os', 'um', 'uma', 'uns', 'umas', 'de', 'do', 'da', 'dos', 'das',
   'em', 'no', 'na', 'nos', 'nas', 'ao', 'aos', 'por', 'para', 'pra', 'pro', 'com',
   'sem', 'sobre', 'entre', 'que', 'quem', 'qual', 'quais', 'quando', 'onde', 'como',
@@ -113,7 +119,7 @@ const STOPWORDS = new Set([
   'seu', 'sua', 'isso', 'isto', 'aquilo', 'esse', 'essa', 'este', 'algum', 'alguma',
   'alguem', 'alguém', 'muito', 'mais', 'menos', 'tudo', 'todo', 'toda', 'todos',
   'todas', 'fazer', 'falou', 'falar', 'disse', 'dizer',
-  // en
+  // English function words.
   'the', 'an', 'of', 'in', 'on', 'at', 'to', 'for', 'with', 'without', 'about',
   'and', 'or', 'but', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have',
   'has', 'had', 'do', 'does', 'did', 'what', 'when', 'where', 'who', 'which',
@@ -486,7 +492,7 @@ export interface Person {
  * Resolve a name to the people and chats it matches.
  *
  * Without this, person-scoped questions are guesswork: the model has to guess how
- * a name is spelled in the archive ("Caio" vs "Caio Souza" vs a bare @lid) before
+ * a name is spelled in the archive ("Sam" vs "Sam Rivera" vs a bare @lid) before
  * it can filter by sender. This turns that guess into a lookup.
  */
 export function listPeople(

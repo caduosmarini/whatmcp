@@ -63,7 +63,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_sender    ON messages (sender_id, ts);
 
 -- Conversation windows: the retrieval unit.
 --
--- A single message is usually unsearchable and unembeddable ("ok", "kkkk", "sim").
+-- A single message is usually unsearchable and unembeddable ("ok", "lol", "yeah").
 -- A window is a burst of consecutive messages in one thread with no silence longer
 -- than the gap threshold, rendered with speaker labels. Windows are what FTS5
 -- indexes and what gets embedded.

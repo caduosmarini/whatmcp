@@ -85,8 +85,8 @@ test('hash ignores timestamps but tracks content', () => {
 
 test('identical bursts in one thread hash identically, enabling vector reuse', () => {
   const w = chunk([
-    msg('1', 1000, 'cheguei'),
-    msg('2', 1000 + DEFAULTS.gapSeconds + 1, 'cheguei'),
+    msg('1', 1000, 'on my way'),
+    msg('2', 1000 + DEFAULTS.gapSeconds + 1, 'on my way'),
   ]);
   assert.equal(w.length, 2);
   assert.equal(windowHash(w[0]), windowHash(w[1]));

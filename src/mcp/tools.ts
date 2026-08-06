@@ -203,8 +203,9 @@ export function buildServer(deps: ToolDeps): McpServer {
         "Search the user's WhatsApp history by meaning and by keyword at once. " +
         'Returns conversation windows (bursts of related messages) rather than ' +
         'isolated messages, so every result carries its own context. Finds ' +
-        'paraphrases and works across languages — an English query matches ' +
-        'Portuguese conversations. Filterable by chat, speaker, and date range. ' +
+        'paraphrases and works in any language, including across them — a query ' +
+        'in one language matches conversations held in another. Filterable by ' +
+        'chat, speaker, and date range. ' +
         'Results are labelled strong or weak: weak means nothing corroborated the ' +
         'match, so treat those as "closest available text", not as answers.',
       inputSchema: {

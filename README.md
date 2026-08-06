@@ -43,13 +43,13 @@ WhatsApp Desktop (macOS)
 The central design decision. Real message history looks like this:
 
 ```
-Caio:    Nem tenho
-Rodrigo: Algm tem o calendário do 2 periodo
+Alex:   nope
+Sam:    anyone have the link for tomorrow
 ```
 
-`"Nem tenho"` is meaningless as a retrieval unit — for BM25, and *especially* for
-an embedding model. A large fraction of any chat history is `Blz`, `Sim`, `N`,
-`Kkkkk`. The signal lives in the burst, not in the message.
+`"nope"` is meaningless as a retrieval unit — for BM25, and *especially* for an
+embedding model. A large fraction of any chat history is `ok`, `lol`, `yeah`,
+`k`. The signal lives in the burst, not in the message.
 
 So messages are grouped into **conversation windows**: consecutive messages in one
 thread with no silence longer than 30 minutes, rendered with speaker labels. On
@@ -89,9 +89,16 @@ machine, so several properties are deliberate rather than incidental:
 ## Search
 
 Hybrid: BM25 (FTS5) fused with dense vectors by Reciprocal Rank Fusion. Neither
-arm suffices alone — BM25 owns names, numbers and slang the encoder never saw
-(`vlw`, `qnd`, `tp` subword-shatter into noise); vectors own paraphrase and
-cross-lingual recall, so an English question finds a Portuguese conversation.
+arm suffices alone — BM25 owns names, numbers and texting shorthand the encoder
+never saw (`idk`, `ttyl`, `lmk` subword-shatter into noise); vectors own
+paraphrase and cross-lingual recall.
+
+**It works in any language, and across them.** The embedding model is
+multilingual, so a question asked in one language retrieves conversations held in
+another — useful for the common case of an English-speaking assistant searching
+chats that are not in English. The keyword arm is language-agnostic by
+construction; only the stopword list is tuned, and extending it is a one-line
+change.
 
 **Results are labelled, not silently filtered.** Cosine similarity on a personal
 corpus does not separate relevant from irrelevant in absolute terms — a genuine

@@ -254,7 +254,7 @@ export function rebuildWindows(
       const fresh = chunk(msgs).map((w) => ({ w, hash: windowHash(w) }));
 
       // Count occurrences rather than using a Set: identical short exchanges
-      // ("me: cheguei") genuinely recur within one thread, and a Set would keep
+      // ("me: on my way") genuinely recur within one thread, and a Set would keep
       // dropping one of each duplicate pair on every single run.
       const want = new Map<string, number>();
       for (const { hash } of fresh) want.set(hash, (want.get(hash) ?? 0) + 1);

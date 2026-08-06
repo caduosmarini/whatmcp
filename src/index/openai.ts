@@ -31,9 +31,10 @@ export function modelTag(cfg: { model: string; dimensions: number }): string {
 }
 
 /**
- * Rough token estimate for batching. Deliberately pessimistic: Portuguese with
- * accents and emoji tokenizes worse than English, and over-splitting a batch costs
- * one extra round trip while under-splitting is a hard 400.
+ * Rough token estimate for batching. Deliberately pessimistic: accented text,
+ * non-Latin scripts and emoji all tokenize worse than plain English, and the
+ * cost of over-splitting a batch is one extra round trip, while under-splitting
+ * is a hard 400.
  */
 export function estimateTokens(s: string): number {
   return Math.ceil(s.length / 2.5);

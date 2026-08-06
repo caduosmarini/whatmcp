@@ -4,11 +4,11 @@
  * Individual chat messages are close to useless as retrieval units. A large
  * fraction of any real history looks like this:
  *
- *     Caio:    Nem tenho
- *     Rodrigo: Algm tem o calendário do 2 periodo
+ *     Alex:   nope
+ *     Sam:    anyone have the link for tomorrow
  *
- * "Nem tenho" carries no standalone meaning — not for BM25, and emphatically not
- * for an embedding model. The signal lives in the burst, not in the message.
+ * "nope" carries no standalone meaning — not for BM25, and emphatically not for
+ * an embedding model. The signal lives in the burst, not in the message.
  *
  * So messages are grouped into windows: consecutive messages in one thread with no
  * silence longer than gapSeconds, rendered with speaker labels. Windows are capped
