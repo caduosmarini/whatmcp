@@ -31,6 +31,7 @@ import { loadConfig, embedConfig, readFileConfig, CONFIG_PATH } from '../config.
 import { buildServer } from './tools.ts';
 import { mountDashboard } from './dashboard.ts';
 import { mountOAuth, validateAccessToken } from './oauth.ts';
+import { emit } from './events.ts';
 import { stats } from '../search/search.ts';
 import { existsSync } from 'node:fs';
 
@@ -184,6 +185,10 @@ function guard(req: express.Request, res: express.Response): boolean {
   }
   if (!authorized(req)) {
     console.error(`auth failure from ${req.ip} at ${new Date().toISOString()}`);
+    emit('auth', 'rejected an unauthenticated /mcp request', {
+      level: 'warn',
+      detail: { ip: req.ip, host: req.get('host') },
+    });
     /*
      * RFC 9728: point the client at the protected-resource metadata. Without this
      * header an MCP client that supports OAuth has no way to discover the
@@ -244,6 +249,15 @@ app.get('/status', (req, res) => {
  */
 app.post('/mcp', jsonBody, async (req, res) => {
   if (!guard(req, res)) return;
+  // Which credential was used matters: it distinguishes a ChatGPT session from
+  // Claude Code, which is otherwise invisible once both are just Bearer headers.
+  const viaOAuth = validateAccessToken((req.get('authorization') ?? '').slice(7)) !== null;
+  const method = (req.body as any)?.method;
+  if (method && method !== 'initialize') {
+    emit('mcp', `${method} via ${viaOAuth ? 'OAuth' : 'static token'}`, {
+      detail: { host: req.get('host') },
+    });
+  }
 
   const server = buildServer({ cfg, embedCfg, keyError });
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });

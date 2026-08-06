@@ -34,6 +34,7 @@ import { runIndex } from '../index/indexer.ts';
 import { embedMissing } from '../index/embed.ts';
 import { invalidate } from '../store.ts';
 import * as wa from '../whatsapp/source.ts';
+import { emit, summarizeArgs, summarizeResult } from './events.ts';
 
 export interface ToolDeps {
   cfg: Config;
@@ -160,9 +161,41 @@ export function buildServer(deps: ToolDeps): McpServer {
     },
   );
 
+  /**
+   * Register a tool with activity tracing.
+   *
+   * Wrapping here rather than inside each handler means a new tool cannot be
+   * added without being observable, and the timing measured is the whole call
+   * including retrieval and any embedding round trip -- which is the number
+   * worth seeing when a query feels slow.
+   */
+  const traced = (
+    name: string,
+    spec: Parameters<typeof server.registerTool>[1],
+    handler: (args: any, extra: any) => Promise<any>,
+  ) => {
+    server.registerTool(name, spec, (async (args: any, extra: any) => {
+      const t0 = Date.now();
+      emit('tool', `${name} started`, { detail: summarizeArgs(args) });
+      try {
+        const res = await handler(args, extra);
+        emit('tool', `${name} finished in ${Date.now() - t0}ms`, {
+          detail: { result: summarizeResult(res) },
+        });
+        return res;
+      } catch (e) {
+        emit('tool', `${name} failed after ${Date.now() - t0}ms`, {
+          level: 'error',
+          detail: { error: (e as Error).message },
+        });
+        throw e;
+      }
+    }) as any);
+  };
+
   // --- search ----------------------------------------------------------------
 
-  server.registerTool(
+  traced(
     'search_messages',
     {
       title: 'Search messages',
@@ -240,7 +273,7 @@ export function buildServer(deps: ToolDeps): McpServer {
     },
   );
 
-  server.registerTool(
+  traced(
     'get_conversation',
     {
       title: 'Get conversation',
@@ -277,7 +310,7 @@ export function buildServer(deps: ToolDeps): McpServer {
 
   // --- navigation ------------------------------------------------------------
 
-  server.registerTool(
+  traced(
     'list_chats',
     {
       title: 'List chats',
@@ -308,7 +341,7 @@ export function buildServer(deps: ToolDeps): McpServer {
     },
   );
 
-  server.registerTool(
+  traced(
     'find_people',
     {
       title: 'Find people',
@@ -341,7 +374,7 @@ export function buildServer(deps: ToolDeps): McpServer {
     },
   );
 
-  server.registerTool(
+  traced(
     'get_chat_summary',
     {
       title: 'Get chat summary',
@@ -368,7 +401,7 @@ export function buildServer(deps: ToolDeps): McpServer {
     },
   );
 
-  server.registerTool(
+  traced(
     'get_timeline',
     {
       title: 'Get timeline',
@@ -405,7 +438,7 @@ export function buildServer(deps: ToolDeps): McpServer {
 
   // --- archive state ---------------------------------------------------------
 
-  server.registerTool(
+  traced(
     'get_archive_status',
     {
       title: 'Archive status',
@@ -439,7 +472,7 @@ export function buildServer(deps: ToolDeps): McpServer {
     },
   );
 
-  server.registerTool(
+  traced(
     'sync_archive',
     {
       title: 'Sync archive',

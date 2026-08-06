@@ -31,6 +31,7 @@ import { embedMissing } from '../index/embed.ts';
 import { invalidate } from '../store.ts';
 import { searchHybrid, listThreads, listPeople, stats, type SearchContext } from '../search/search.ts';
 import * as wa from '../whatsapp/source.ts';
+import { recent, subscribe, emit } from './events.ts';
 import { existsSync } from 'node:fs';
 
 const HTML = readFileSync(join(import.meta.dirname, 'dashboard.html'), 'utf8');
@@ -237,6 +238,43 @@ export function mountDashboard(app: express.Express, deps: DashboardDeps): void 
     } catch (e) {
       res.json({ error: (e as Error).message });
     }
+  });
+
+  /*
+   * Live activity stream.
+   *
+   * NDJSON over a long-lived response rather than EventSource, for one concrete
+   * reason: EventSource cannot set request headers, and every /api route here
+   * requires the X-WhatMCP header as its CSRF control. Using fetch + a stream
+   * reader keeps that control intact instead of carving an exception into it.
+   */
+  app.get('/api/logs/stream', (req, res) => {
+    if (!auth(req, res)) return;
+
+    res.setHeader('Content-Type', 'application/x-ndjson');
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Accel-Buffering', 'no');
+
+    // Replay recent history first, so the panel is populated on open rather than
+    // blank until something happens to occur.
+    for (const e of recent(80)) res.write(JSON.stringify(e) + '\n');
+
+    const unsubscribe = subscribe((e) => {
+      try { res.write(JSON.stringify(e) + '\n'); } catch { /* client went away */ }
+    });
+
+    // Proxies and browsers drop idle connections; a periodic newline is cheap and
+    // keeps the stream open through cloudflared without any protocol ceremony.
+    const keepalive = setInterval(() => {
+      try { res.write('\n'); } catch { /* ignore */ }
+    }, 20_000);
+
+    const close = () => {
+      clearInterval(keepalive);
+      unsubscribe();
+    };
+    req.on('close', close);
+    res.on('close', close);
   });
 
   /*

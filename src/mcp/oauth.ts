@@ -40,6 +40,7 @@ import { join } from 'node:path';
 import express from 'express';
 
 import { DATA_DIR } from '../config.ts';
+import { emit } from './events.ts';
 
 const CONSENT_HTML = readFileSync(join(import.meta.dirname, 'consent.html'), 'utf8');
 
@@ -238,6 +239,9 @@ export function mountOAuth(app: express.Express, deps: OAuthDeps): void {
       .run(clientId, String(body.client_name ?? 'unnamed'), JSON.stringify(uris.map(String)), Date.now());
 
     console.error(`oauth: registered client ${clientId} (${body.client_name ?? 'unnamed'})`);
+    emit('oauth', `client registered: ${String(body.client_name ?? 'unnamed')}`, {
+      detail: { client_id: clientId },
+    });
     res.status(201).json({
       client_id: clientId,
       client_id_issued_at: Math.floor(Date.now() / 1000),
@@ -383,6 +387,7 @@ export function mountOAuth(app: express.Express, deps: OAuthDeps): void {
     if (!safeEqual(String(b.token ?? ''), deps.token)) {
       attempts.fail(ip);
       console.error(`oauth: consent token rejected from ${ip} at ${new Date().toISOString()}`);
+      emit('oauth', 'consent token rejected', { level: 'warn', detail: { ip } });
       const client = db.prepare('SELECT name FROM clients WHERE client_id = ?').get(parsed.req.client_id) as
         | { name: string }
         | undefined;
@@ -417,6 +422,9 @@ export function mountOAuth(app: express.Express, deps: OAuthDeps): void {
     to.searchParams.set('code', code);
     if (parsed.req.state) to.searchParams.set('state', parsed.req.state);
     console.error(`oauth: authorized ${parsed.req.client_id}`);
+    emit('oauth', 'consent approved, authorization code issued', {
+      detail: { client_id: parsed.req.client_id },
+    });
     res.redirect(302, to.toString());
   });
 
@@ -482,6 +490,9 @@ export function mountOAuth(app: express.Express, deps: OAuthDeps): void {
         return;
       }
 
+      emit('oauth', 'access token issued (authorization_code)', {
+        detail: { client_id: row.client_id },
+      });
       res.json(issue(row.client_id, row.scope, row.resource));
       return;
     }
@@ -498,6 +509,9 @@ export function mountOAuth(app: express.Express, deps: OAuthDeps): void {
       // Rotate: the presented refresh token is burned as it is exchanged, so a
       // stolen copy is usable at most once and its use invalidates the real one.
       db.prepare('UPDATE tokens SET revoked = 1 WHERE token_hash = ?').run(sha256(rt));
+      emit('oauth', 'access token refreshed (old one rotated out)', {
+        detail: { client_id: row.client_id },
+      });
       res.json(issue(row.client_id, row.scope, row.resource));
       return;
     }

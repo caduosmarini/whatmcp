@@ -103,6 +103,33 @@
   .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   @media (max-width: 720px) { .cols { grid-template-columns: 1fr; } }
 
+  /* --- activity log --- */
+  .logbar { display: flex; align-items: center; gap: 10px; margin: 30px 0 12px; }
+  .logbar h2 { margin: 0; flex: 1; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); display: inline-block; }
+  .dot.live { background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+  .logbar select, .logbar button { font-size: 13px; padding: 5px 10px; }
+
+  #activity {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    height: 320px; overflow-y: auto; padding: 4px 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px;
+  }
+  .ev { display: flex; gap: 10px; padding: 4px 14px; align-items: baseline; }
+  .ev:hover { background: var(--chip); }
+  .ev .ts { color: var(--muted); flex-shrink: 0; }
+  .ev .kind {
+    flex-shrink: 0; width: 52px; text-transform: uppercase; font-size: 10.5px;
+    letter-spacing: 0.04em; color: var(--muted); font-weight: 600;
+  }
+  .ev .txt { flex: 1; word-break: break-word; }
+  .ev .det { color: var(--muted); }
+  .ev.warn .txt { color: var(--warn); }
+  .ev.error .txt { color: var(--bad); }
+  .ev.kind-tool .kind { color: var(--accent); }
+  .ev.kind-oauth .kind { color: var(--warn); }
+  .empty { padding: 14px; color: var(--muted); }
+
   .login { max-width: 420px; margin: 12vh auto; }
   .note { color: var(--muted); font-size: 12.5px; margin-top: 10px; }
   .err { color: var(--bad); font-size: 13px; margin-top: 10px; }
@@ -155,6 +182,23 @@
   </div>
   <div id="searchMeta" class="sub" style="margin:-10px 0 10px"></div>
   <div id="results" class="panel hide"></div>
+
+  <div class="logbar">
+    <h2>Activity</h2>
+    <span id="liveDot" class="dot" title="stream status"></span>
+    <span class="sub" id="liveText">connecting…</span>
+    <select id="logFilter" title="filter by kind">
+      <option value="">all</option>
+      <option value="tool">tools</option>
+      <option value="mcp">mcp</option>
+      <option value="oauth">oauth</option>
+      <option value="auth">auth</option>
+      <option value="sync">sync</option>
+    </select>
+    <button id="pauseBtn" title="pause auto-scroll">Pause</button>
+    <button id="clearBtn">Clear</button>
+  </div>
+  <div id="activity"><div class="empty">waiting for activity…</div></div>
 
   <div class="cols">
     <div>
@@ -220,7 +264,7 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: $('token').value.trim() }),
     }).then(function (r) {
-      if (r.ok) { $('token').value = ''; showApp(); }
+      if (r.ok) { $('token').value = ''; showApp(); streamLogs(); }
       else showLogin('That token was not accepted.');
     }).catch(function () { showLogin('Could not reach the server.'); });
   });
@@ -392,11 +436,122 @@
   $('searchBtn').addEventListener('click', doSearch);
   $('q').addEventListener('keydown', function (e) { if (e.key === 'Enter') doSearch(); });
 
+  // --- activity stream -----------------------------------------------------
+
+  var paused = false;
+  var filter = '';
+  var seen = 0;
+
+  function fmtTime(t) {
+    var d = new Date(t);
+    return String(d.getHours()).padStart(2, '0') + ':' +
+           String(d.getMinutes()).padStart(2, '0') + ':' +
+           String(d.getSeconds()).padStart(2, '0');
+  }
+
+  function detailText(d) {
+    if (!d) return '';
+    var parts = [];
+    for (var k in d) {
+      if (!Object.prototype.hasOwnProperty.call(d, k)) continue;
+      var v = d[k];
+      if (v === '' || v === undefined || v === null) continue;
+      parts.push(k + '=' + v);
+    }
+    return parts.length ? '  ' + parts.join('  ') : '';
+  }
+
+  function addEvent(ev) {
+    var host = $('activity');
+    if (seen === 0) clear(host);
+    seen++;
+
+    var row = el('div', 'ev ' + (ev.level || 'info') + ' kind-' + (ev.kind || ''));
+    row.dataset.kind = ev.kind || '';
+    if (filter && ev.kind !== filter) row.style.display = 'none';
+
+    row.appendChild(el('span', 'ts', fmtTime(ev.t)));
+    row.appendChild(el('span', 'kind', ev.kind || ''));
+    var txt = el('span', 'txt', ev.msg);
+    // Detail is appended as its own text node — never innerHTML. Tool arguments
+    // are model-supplied and search queries can contain anything at all.
+    var det = detailText(ev.detail);
+    if (det) txt.appendChild(el('span', 'det', det));
+    row.appendChild(txt);
+    host.appendChild(row);
+
+    // Keep the DOM bounded; the server ring buffer is 400 and this matches it.
+    while (host.children.length > 400) host.removeChild(host.firstChild);
+    if (!paused) host.scrollTop = host.scrollHeight;
+  }
+
+  function applyFilter() {
+    var rows = $('activity').children;
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (!r.dataset) continue;
+      r.style.display = (!filter || r.dataset.kind === filter) ? '' : 'none';
+    }
+  }
+
+  $('logFilter').addEventListener('change', function () {
+    filter = this.value;
+    applyFilter();
+  });
+  $('pauseBtn').addEventListener('click', function () {
+    paused = !paused;
+    this.textContent = paused ? 'Resume' : 'Pause';
+  });
+  $('clearBtn').addEventListener('click', function () {
+    clear($('activity'));
+    seen = 0;
+    $('activity').appendChild(el('div', 'empty', 'cleared — waiting for activity…'));
+  });
+
+  function setLive(on, note) {
+    $('liveDot').className = 'dot' + (on ? ' live' : '');
+    $('liveText').textContent = note;
+  }
+
+  /*
+   * Reconnecting reader. The stream is a long-lived response rather than an
+   * EventSource, because EventSource cannot set the X-WhatMCP header that every
+   * /api route requires — so reconnection has to be handled here rather than by
+   * the browser.
+   */
+  function streamLogs() {
+    setLive(false, 'connecting…');
+    api('/api/logs/stream').then(function (res) {
+      if (res.status === 401) { showLogin(); return; }
+      setLive(true, 'live');
+      var reader = res.body.getReader();
+      var dec = new TextDecoder();
+      var buf = '';
+      function pump() {
+        return reader.read().then(function (x) {
+          if (x.done) throw new Error('stream ended');
+          buf += dec.decode(x.value, { stream: true });
+          var lines = buf.split('\n');
+          buf = lines.pop();
+          lines.forEach(function (line) {
+            if (!line.trim()) return;
+            try { addEvent(JSON.parse(line)); } catch (e) { /* partial frame */ }
+          });
+          return pump();
+        });
+      }
+      return pump();
+    }).catch(function () {
+      setLive(false, 'disconnected — retrying');
+      setTimeout(streamLogs, 3000);
+    });
+  }
+
   // --- boot ----------------------------------------------------------------
 
   api('/api/stats').then(function (r) {
     if (r.status === 401) showLogin();
-    else showApp();
+    else { showApp(); streamLogs(); }
   }).catch(function () { showLogin('Could not reach the server.'); });
 })();
 </script>
