@@ -2,6 +2,24 @@
 
 A local MCP server over a local, durable archive of your WhatsApp history.
 
+```bash
+git clone <this repo> && cd WhatMCP
+npm install
+npm run setup     # checks permissions, takes your API key, builds and embeds the archive
+```
+
+`setup` is interactive and explains each step before doing it, including what the
+one-time embedding will cost (cents, for a nine-year history). If anything is
+wrong with the machine it says exactly what to fix.
+
+Requires **macOS**, **Node >= 22.6**, and **WhatsApp Desktop signed in**.
+
+> **Full Disk Access is the one thing that trips everyone up.** WhatsApp's
+> database is protected by macOS privacy controls, and the permission belongs to
+> the app that *launches* WhatMCP — your terminal, or Claude Desktop — not to
+> node. `npm run setup` and `npm run doctor` both detect this and name the exact
+> app to grant it to. If a read fails, that is almost always why.
+
 Everything stays on this machine except one thing, stated up front: **text is sent
 to OpenAI to be embedded** — every conversation window once at index time, and
 every search query thereafter. The archive, the vectors, the index and the search
@@ -39,13 +57,13 @@ this corpus:
 
 | | |
 |---|---|
-| messages archived | 50,113 |
-| conversation windows | 5,214 |
-| chats | 1,065 |
+| messages archived | 97,195 |
+| conversation windows | 11,475 |
+| chats | 1,071 |
 | span | Oct 2017 → today |
 | full index time | ~2s |
 
-Those 5,214 windows are coherent, self-contained, and genuinely searchable.
+Those 11,475 windows are coherent, self-contained, and genuinely searchable.
 
 The model is **retrieval-to-navigate, not retrieval-to-answer**. `search_messages`
 gets the agent to the right neighbourhood; `get_conversation` expands any hit into
@@ -92,32 +110,67 @@ put unrelated text near 0.75 cosine, `text-embedding-3-small` near 0.10.
 
 ## Setup
 
-Requires Node ≥ 22.6 and WhatsApp Desktop signed in on this Mac.
+```bash
+npm run setup
+```
+
+That walks through permissions, the API key, the first index and embed (with the
+cost shown before you agree), threshold calibration, and background sync.
+
+Prefer to do it by hand, or scripting it:
 
 ```bash
-npm install
 npm run wa -- set-key sk-...   # stored 0600 in ~/.whatmcp/config.json
-npm run sync                   # index + embed, ~1 cent for the whole history
+npm run sync                   # index + embed
 npm run wa -- calibrate        # fit similarity thresholds to this corpus
-npm run wa -- doctor           # verify
+npm run wa -- sync-every 6     # background sync every 6h (0 disables)
+npm run doctor                 # verify everything
 ```
 
 Check it works before wiring up a client:
 
 ```bash
-npm run wa -- search "who is giving me a ride"
+npm run wa -- search "something you talked about"
 ```
+
+### Keeping it current
+
+WhatsApp prunes its own local database, so anything it drops before your next
+sync is gone for good — `npm run setup` therefore installs a background sync
+every 6 hours by default. It is a LaunchAgent separate from the MCP server, so
+the archive keeps growing whether or not an AI client is running. Routine syncs
+cost fractions of a cent; a quiet interval costs nothing, since nothing new gets
+embedded.
+
+```bash
+npm run wa -- sync-every 12    # change the cadence
+npm run wa -- sync-every 0     # back to manual
+tail -f ~/.whatmcp/logs/sync.log
+```
+
+### Backing it up
+
+The archive is a single SQLite file. Copy it:
+
+```bash
+cp ~/.whatmcp/archive.db ~/wherever/
+```
+
+It is worth doing. After a while it holds messages WhatsApp itself no longer has.
 
 ## Connecting
 
 **Claude Code**
 
 ```bash
-claude mcp add whatmcp -- node --experimental-sqlite --experimental-strip-types --no-warnings /Users/pedroschott/WhatMCP/src/mcp/server.ts
+claude mcp add whatmcp -- node --experimental-sqlite --experimental-strip-types \
+  --no-warnings "$(pwd)/src/mcp/server.ts"
 ```
 
 **Claude Desktop** — add to
 `~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+`npm run setup` prints this block with your real paths already filled in.
 
 ```json
 {
@@ -128,7 +181,7 @@ claude mcp add whatmcp -- node --experimental-sqlite --experimental-strip-types 
         "--experimental-sqlite",
         "--experimental-strip-types",
         "--no-warnings",
-        "/Users/pedroschott/WhatMCP/src/mcp/server.ts"
+        "/absolute/path/to/WhatMCP/src/mcp/server.ts"
       ]
     }
   }
@@ -139,6 +192,8 @@ No API key goes in that file. A GUI-launched MCP server inherits none of your
 shell environment, which is exactly why the key lives in `~/.whatmcp/config.json`.
 
 ### HTTP, for agents that need a URL
+
+> Full walkthrough, security model and troubleshooting: **[docs/REMOTE.md](docs/REMOTE.md)**
 
 Some agent frameworks can only talk to an endpoint. Stdio has no network surface
 at all, so prefer it when you can; use this when you can't.
@@ -315,6 +370,8 @@ src/
 
 - **Media is not indexed** — only messages carrying text. Media rows are archived
   (so nothing is lost) but contribute nothing to search.
+- **No reply threading.** WhatsApp's parent-message reference did not populate on
+  any build tested, so the field was removed rather than shipped permanently NULL.
 - **Name resolution is 96% complete, not 100%.** On this store `ZWAGROUPMEMBER.
   ZCONTACTNAME` is empty for all 15,152 rows and `ZFIRSTNAME` holds base64
   protobuf, so names come from push names plus a cross-reference against DM

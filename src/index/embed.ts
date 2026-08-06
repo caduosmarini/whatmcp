@@ -76,6 +76,35 @@ export function backfillHashes(db: DB): number {
   return rows.length;
 }
 
+/**
+ * What a sync would cost, without embedding anything.
+ *
+ * Separate from embedMissing because the obvious shortcut -- calling it with
+ * limit 0 -- reports zero pending rather than an estimate, since the limit is
+ * applied before the count. Anyone showing a user a price before asking them to
+ * approve it needs the real number.
+ */
+export function estimatePending(
+  storePath: string,
+  cfg: { model: string; dimensions: number },
+): { pending: number; tokens: number; costUSD: number } {
+  const db = openStore(storePath);
+  try {
+    backfillHashes(db);
+    const rows = db.prepare(`
+      SELECT DISTINCT w.content_hash AS hash, w.text AS text
+      FROM windows w
+      LEFT JOIN window_vectors v
+        ON v.content_hash = w.content_hash AND v.model = ?
+      WHERE v.content_hash IS NULL AND w.content_hash IS NOT NULL
+    `).all(modelTag(cfg)) as { hash: string; text: string }[];
+    const tokens = rows.reduce((n, r) => n + estimateTokens(r.text), 0);
+    return { pending: rows.length, tokens, costUSD: estimateCostUSD(cfg.model, tokens) };
+  } finally {
+    db.close();
+  }
+}
+
 export async function embedMissing(
   storePath: string,
   cfg: EmbedConfig,

@@ -106,13 +106,12 @@ export function runIndex(storePath: string, opts: IndexOptions): IndexResult {
      */
     const upMessage = db.prepare(`
       INSERT INTO messages
-        (id, thread_id, sender_id, ts, text, is_from_me, kind, reply_to,
+        (id, thread_id, sender_id, ts, text, is_from_me, kind,
          stanza_id, source_pk, first_seen_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         text      = excluded.text,
         kind      = excluded.kind,
-        reply_to  = COALESCE(excluded.reply_to, messages.reply_to),
         sender_id = COALESCE(excluded.sender_id, messages.sender_id),
         source_pk = excluded.source_pk
       WHERE messages.text IS NOT excluded.text OR messages.kind IS NOT excluded.kind
@@ -143,7 +142,7 @@ export function runIndex(storePath: string, opts: IndexOptions): IndexResult {
 
         const res = upMessage.run(
           m.id, m.thread_id, m.sender_id, m.ts, m.text, m.is_from_me,
-          wa.messageKind(m.msg_type), m.reply_to, m.stanza_id, m.source_pk, now,
+          wa.messageKind(m.msg_type), m.stanza_id, m.source_pk, now,
         );
 
         if (isNew) newMessages++;

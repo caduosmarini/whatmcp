@@ -18,7 +18,10 @@ import {
 } from './config.ts';
 import { existsSync, statSync, rmSync, readFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { listClients, revokeClient } from './mcp/oauth.ts';
+import { runSetup, installSyncAgent } from './setup.ts';
+import { runPreflight } from './preflight.ts';
 import { dirname, join } from 'node:path';
 
 const argv = process.argv.slice(2);
@@ -82,6 +85,32 @@ function ctx(): SearchContext {
 }
 
 switch (cmd) {
+  case 'setup': {
+    await runSetup();
+    break;
+  }
+
+  /* Set the background sync cadence without the wizard. */
+  case 'sync-every': {
+    const hours = Math.max(0, Number(positional[0]));
+    if (!positional.length || Number.isNaN(hours)) {
+      console.error('usage: npm run wa -- sync-every <hours>   (0 disables)');
+      process.exit(1);
+    }
+    writeFileConfig({ sync_interval_hours: hours });
+    const uid = String(process.getuid?.() ?? 501);
+    if (hours === 0) {
+      try {
+        execFileSync('launchctl', ['bootout', `gui/${uid}/com.whatmcp.sync`], { stdio: 'ignore' });
+      } catch { /* not loaded */ }
+      console.log('background sync disabled; run `npm run sync` manually');
+    } else {
+      installSyncAgent(hours);
+      console.log(`syncing every ${hours}h — logs at ~/.whatmcp/logs/sync.log`);
+    }
+    break;
+  }
+
   case 'set-key': {
     const key = positional[0];
     if (!key) {
@@ -326,30 +355,48 @@ switch (cmd) {
         (cfg.strongSim === undefined ? dim('   (run: npm run wa -- calibrate)') : ''),
     );
 
-    console.log(bold('\nwhatsapp source'));
+    console.log(bold('\nenvironment'));
+    let blocked = false;
+    for (const c of runPreflight(cfg.chatstorage)) {
+      console.log(`  ${c.ok ? '\x1b[32m✓\x1b[0m' : '\x1b[31m✗\x1b[0m'} ${c.label}: ${c.detail}`);
+      if (!c.ok && c.fix) {
+        console.log(c.fix.split('\n').map((l) => '      ' + l).join('\n'));
+        blocked = true;
+      }
+    }
+
     const src = wa.sourceInfo(cfg.chatstorage);
-    if (!src.exists) {
-      console.log(`  \x1b[31mnot found\x1b[0m at ${cfg.chatstorage}`);
-      console.log('  Is WhatsApp Desktop installed and signed in on this Mac?');
-    } else {
-      console.log(`  path:     ${cfg.chatstorage}`);
-      console.log(`  size:     ${fmtBytes(src.size)}, modified ${fmtTs(src.mtime)}`);
+    if (src.exists && !blocked) {
+      console.log(`  path:    ${cfg.chatstorage}`);
+      console.log(`  size:    ${fmtBytes(src.size)}, modified ${fmtTs(src.mtime)}`);
       let snap: string | null = null;
       try {
         snap = wa.snapshot(cfg.chatstorage);
         const counts = wa.sourceCounts(snap);
-        console.log(`  readable: yes — ${counts.messages} message(s), max Z_PK ${counts.maxPk}`);
+        console.log(`  content: ${counts.messages} message(s), max Z_PK ${counts.maxPk}`);
       } catch (e) {
-        console.log(`  readable: \x1b[31mno\x1b[0m — ${(e as Error).message}`);
-        console.log(
-          '  macOS may be withholding Full Disk Access from the process running this.',
-        );
+        console.log(`  content: \x1b[31munreadable\x1b[0m — ${(e as Error).message}`);
       } finally {
-        // snapshot() copies ~47 MB into a temp dir; doctor is run repeatedly while
-        // troubleshooting, so leaving them behind would quietly fill /tmp.
+        // snapshot() copies ~100 MB into a temp dir; doctor gets run repeatedly
+        // while troubleshooting, so leaving them behind would fill /tmp.
         if (snap) rmSync(dirname(snap), { recursive: true, force: true });
       }
     }
+
+    console.log(bold('\nbackground agents'));
+    for (const label of ['com.whatmcp.sync', 'com.whatmcp.server', 'com.whatmcp.tunnel']) {
+      let state = 'not installed';
+      try {
+        const out = execFileSync('launchctl', ['print', `gui/${process.getuid?.() ?? 501}/${label}`],
+          { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+        // Match to end of line: launchd says "not running", and \w+ silently
+        // truncates that to "not", which reads as a different state entirely.
+        state = /state = (.+)/.exec(out)?.[1]?.trim() ?? 'loaded';
+      } catch { /* not loaded */ }
+      console.log(`  ${label.padEnd(20)} ${state}`);
+    }
+    const iv = loadConfig().syncIntervalHours;
+    console.log(`  sync cadence:        ${iv ? iv + 'h' : 'manual only'}`);
 
     console.log(bold('\narchive'));
     if (!existsSync(cfg.store)) {
@@ -447,6 +494,8 @@ switch (cmd) {
   default:
     console.log(`WhatMCP — local MCP server over your WhatsApp history
 
+  setup                     guided first-run: key, index, embed, periodic sync
+  sync-every <hours>        background sync cadence (0 disables)
   set-key sk-...            store the OpenAI API key (0600, never logged)
   http-token                generate the HTTP bearer token (for npm run serve:http)
   url                       print the current public tunnel URL

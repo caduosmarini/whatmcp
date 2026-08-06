@@ -15,7 +15,8 @@
     "doctor": "npm run wa -- doctor",
     "serve": "node --experimental-sqlite --experimental-strip-types --no-warnings src/mcp/server.ts",
     "test": "node --experimental-sqlite --experimental-strip-types --no-warnings --test 'test/*.test.ts'",
-    "serve:http": "node --experimental-sqlite --experimental-strip-types --no-warnings src/mcp/http.ts"
+    "serve:http": "node --experimental-sqlite --experimental-strip-types --no-warnings src/mcp/http.ts",
+    "setup": "node --experimental-sqlite --experimental-strip-types --no-warnings src/cli.ts setup"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",

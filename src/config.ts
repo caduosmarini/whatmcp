@@ -35,6 +35,8 @@ export interface FileConfig {
   openai_dims?: number;
   store?: string;
   chatstorage?: string;
+  /** Background sync cadence in hours; 0 or absent means manual only. */
+  sync_interval_hours?: number;
   /** Written by `wa calibrate`; see search.ts for why these are not constants. */
   min_sim?: number;
   strong_sim?: number;
@@ -97,6 +99,8 @@ export interface Config {
   /** Undefined means "use the code default"; set by `wa calibrate`. */
   minSim?: number;
   strongSim?: number;
+  /** Background sync cadence in hours; 0 means manual only. */
+  syncIntervalHours: number;
 }
 
 export const NATIVE_DIMS: Record<string, number> = {
@@ -118,6 +122,7 @@ export function loadConfig(): Config {
     openaiDims: dims,
     minSim: f.min_sim,
     strongSim: f.strong_sim,
+    syncIntervalHours: Number(f.sync_interval_hours ?? 0),
   };
 }
 

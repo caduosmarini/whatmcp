@@ -36,7 +36,6 @@ export interface RawMessage {
   text: string | null;
   is_from_me: number;
   msg_type: number;
-  reply_to: string | null;
 }
 
 /**
@@ -171,12 +170,10 @@ SELECT
   m.ZMESSAGETYPE                        AS msg_type,
   m.ZTEXT                               AS text,
   CAST(m.ZMESSAGEDATE AS INTEGER)       AS apple_ts,
-  gm.ZMEMBERJID                         AS member_jid,
-  parent.ZSTANZAID                      AS reply_to
+  gm.ZMEMBERJID                         AS member_jid
 FROM ZWAMESSAGE m
 JOIN      ZWACHATSESSION c      ON c.Z_PK      = m.ZCHATSESSION
 LEFT JOIN ZWAGROUPMEMBER  gm    ON gm.Z_PK     = m.ZGROUPMEMBER
-LEFT JOIN ZWAMESSAGE      parent ON parent.Z_PK = m.ZPARENTMESSAGE
 WHERE m.Z_PK > ?
   AND c.ZCONTACTJID IS NOT NULL
 ORDER BY m.Z_PK
@@ -233,7 +230,6 @@ export function extract(snapshotPath: string, sincePk = 0): RawMessage[] {
         text: r.text ? String(r.text) : null,
         is_from_me: r.is_from_me ? 1 : 0,
         msg_type: Number(r.msg_type ?? 0),
-        reply_to: r.reply_to ? String(r.reply_to) : null,
       });
     }
     return out;

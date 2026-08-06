@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Periodic archive sync.
+
+  A SEPARATE agent from the server, deliberately. Syncing inside the HTTP server
+  would tie the archive's growth to the server being up, and the whole premise
+  here is that WhatsApp prunes its own store: history has to be captured whether
+  or not an AI client happens to be running. This agent runs on its own schedule
+  and needs nothing else alive.
+
+  StartInterval is rendered from sync_interval_hours (default 6). launchd counts
+  from the last launch, not from a wall clock, and it does NOT stack missed runs:
+  if the Mac was asleep through three intervals, one run fires on wake. That is
+  the desired behaviour — a sync is idempotent and only ever catches up.
+
+  Cost is bounded and small: a routine sync embeds only genuinely new windows,
+  which is fractions of a cent. A quiet interval costs nothing at all, because
+  the pending set comes out empty and no API call is made.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.whatmcp.sync</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE__</string>
+    <string>--experimental-sqlite</string>
+    <string>--experimental-strip-types</string>
+    <string>--no-warnings</string>
+    <string>__REPO__/src/cli.ts</string>
+    <string>sync</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+
+  <!-- Run once at load so a fresh install is current immediately. -->
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>__INTERVAL__</integer>
+
+  <!--
+    No KeepAlive: this is a periodic task, not a daemon. KeepAlive would restart
+    it the instant it exited and sync in a hot loop.
+  -->
+  <key>StandardOutPath</key>
+  <string>__HOME__/.whatmcp/logs/sync.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/.whatmcp/logs/sync.log</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+  <!-- Never let a background sync compete with the user's foreground work. -->
+  <key>Nice</key>
+  <integer>5</integer>
+</dict>
+</plist>
