@@ -11,8 +11,23 @@
   script-src 'none' is deliberate. There is no client-side logic here, so any
   script executing on this page would be someone else's.
 -->
+<!--
+  form-action lists BOTH 'self' and the client's redirect origin, and the second
+  one is not optional.
+
+  Browsers apply form-action to the redirect that FOLLOWS a form submission, not
+  just to the submission itself. With `form-action 'self'` alone, this page posts
+  fine, the server issues an authorization code and returns a 302 to the client —
+  and the browser silently refuses to follow it. No error, no console warning the
+  user would notice, no navigation. It looks exactly like a dead button, which is
+  how it shipped and how it was found.
+
+  The origin injected here is taken from the redirect_uri AFTER that URI has been
+  matched exactly against the client's registered list, so this widens the policy
+  only to a destination the server already decided to trust.
+-->
 <meta http-equiv="Content-Security-Policy"
-      content="default-src 'none'; style-src 'unsafe-inline'; form-action 'self'">
+      content="default-src 'none'; style-src 'unsafe-inline'; form-action 'self' {{redirect_origin}}">
 <meta name="referrer" content="no-referrer">
 <title>Authorize access</title>
 <style>

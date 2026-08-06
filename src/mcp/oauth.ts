@@ -304,7 +304,18 @@ export function mountOAuth(app: express.Express, deps: OAuthDeps): void {
   }
 
   function renderConsent(res: express.Response, vars: Record<string, string>, status = 200): void {
-    let html = CONSENT_HTML;
+    /*
+     * Derived here rather than at each call site, so it cannot be forgotten in
+     * one of them — and a missing redirect_origin does not fail loudly, it just
+     * makes the approve button do nothing (see the CSP comment in consent.html).
+     */
+    let redirectOrigin = "'none'";
+    try {
+      redirectOrigin = new URL(vars.redirect_uri).origin;
+    } catch {
+      /* unparseable redirect_uri never reaches here; parseAuthRequest rejects it */
+    }
+    let html = CONSENT_HTML.replaceAll('{{redirect_origin}}', escapeHtml(redirectOrigin));
     for (const [k, v] of Object.entries(vars)) {
       // Values are escaped before substitution; they end up inside HTML attributes
       // and text nodes, and client_name in particular is attacker-supplied at
