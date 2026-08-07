@@ -23,6 +23,7 @@ import { listClients, revokeClient } from './mcp/oauth.ts';
 import { runSetup, installSyncAgent } from './setup.ts';
 import { runPreflight } from './preflight.ts';
 import { dirname, join } from 'node:path';
+import { readSecret } from './secret-input.ts';
 
 const argv = process.argv.slice(2);
 const [cmd, ...rest] = argv;
@@ -140,12 +141,20 @@ switch (cmd) {
   }
 
   case 'set-key': {
-    const key = positional[0];
-    if (!key) {
-      console.error('usage: npm run wa -- set-key sk-...');
+    if (positional[0]) {
+      console.error(
+        'refusing an API key on the command line: it would be saved in shell history\n' +
+          'and briefly visible in the process list.\n\n' +
+          'Run `npm run wa -- set-key` for a hidden prompt, or pipe a protected file to it.',
+      );
       process.exit(1);
     }
-    if (!key.startsWith('sk-')) {
+    const key = await readSecret('OpenAI API key (input hidden): ');
+    if (!key) {
+      console.error('no key received');
+      process.exit(1);
+    }
+    if (!/^sk-[^\s]+$/.test(key)) {
       console.error(`that does not look like an OpenAI key (expected it to start with "sk-")`);
       process.exit(1);
     }
@@ -500,7 +509,7 @@ switch (cmd) {
 
   setup                     guided first-run: key, index, embed, periodic sync
   sync-every <hours>        background sync cadence (0 disables)
-  set-key sk-...            store the OpenAI API key (0600, never logged)
+  set-key                   securely prompt for the OpenAI API key (0600)
   http-token                generate the HTTP bearer token (for npm run serve:http)
   url                       print the current public tunnel URL
   oauth [revoke <id>]       list or revoke OAuth clients

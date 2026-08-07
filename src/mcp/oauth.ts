@@ -33,13 +33,13 @@
 
 import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { readFileSync, mkdirSync, existsSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 // A value import, not `import type`: express.urlencoded and express.json are
 // called below, and type-stripping erases a type-only import entirely.
 import express from 'express';
 
-import { DATA_DIR } from '../config.ts';
+import { DATA_DIR, ensureDataDir } from '../config.ts';
 import { emit } from './events.ts';
 
 const CONSENT_HTML = readFileSync(join(import.meta.dirname, 'consent.html'), 'utf8');
@@ -48,6 +48,13 @@ const CODE_TTL_MS = 60_000;
 const ACCESS_TTL_MS = 60 * 60 * 1000;        // 1 hour
 const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 export const SCOPE = 'whatmcp:read';
+const MAX_CLIENTS = 200;
+const MAX_CLIENT_NAME = 120;
+const MAX_REDIRECT_URIS = 10;
+const MAX_REDIRECT_URI = 2048;
+const REGISTRATION_WINDOW_MS = 60 * 60 * 1000;
+const REGISTRATIONS_PER_WINDOW = 10;
+const MAX_ACCESS_TOKENS_PER_CLIENT = 20;
 
 function sha256(s: string): string {
   return createHash('sha256').update(s).digest('hex');
@@ -70,9 +77,14 @@ function safeEqual(a: string, b: string): boolean {
  * guarantee away for the sake of one table.
  */
 function openOAuthDb(): DatabaseSync {
-  if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
-  const db = new DatabaseSync(join(DATA_DIR, 'oauth.db'));
+  ensureDataDir();
+  const path = join(DATA_DIR, 'oauth.db');
+  const db = new DatabaseSync(path);
   db.exec('PRAGMA journal_mode = WAL');
+  chmodSync(path, 0o600);
+  for (const sidecar of [`${path}-wal`, `${path}-shm`]) {
+    if (existsSync(sidecar)) chmodSync(sidecar, 0o600);
+  }
   db.exec(`
     CREATE TABLE IF NOT EXISTS clients (
       client_id     TEXT PRIMARY KEY,
@@ -126,6 +138,29 @@ function originOf(req: express.Request, deps: OAuthDeps): string {
   return `${proto}://${req.get('host')}`;
 }
 
+export function consentSecurityHeaders(redirectUri: string): {
+  redirectOrigin: string;
+  headers: Record<string, string>;
+} {
+  let redirectOrigin = "'none'";
+  try {
+    redirectOrigin = new URL(redirectUri).origin;
+  } catch {
+    // Invalid redirect URIs are rejected before consent rendering. Keeping a
+    // deny-all fallback makes this helper safe if a future call site gets it wrong.
+  }
+  return {
+    redirectOrigin,
+    headers: {
+      'Content-Security-Policy':
+        `default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; ` +
+        `form-action 'self' ${redirectOrigin}; frame-ancestors 'none'; base-uri 'none'`,
+      'X-Frame-Options': 'DENY',
+      'Cache-Control': 'no-store',
+    },
+  };
+}
+
 /**
  * Brute-force damper for the public consent form.
  *
@@ -156,10 +191,107 @@ class Attempts {
   }
 }
 
+/** Fixed-window limiter with bounded bookkeeping for unauthenticated endpoints. */
+export class FixedWindowLimiter {
+  private hits = new Map<string, { n: number; resetAt: number }>();
+  private limit: number;
+  private windowMs: number;
+  private maxKeys: number;
+
+  constructor(limit: number, windowMs: number, maxKeys = 10_000) {
+    this.limit = limit;
+    this.windowMs = windowMs;
+    this.maxKeys = maxKeys;
+  }
+
+  take(key: string, now = Date.now()): { ok: true } | { ok: false; retryAfterMs: number } {
+    let entry = this.hits.get(key);
+    if (!entry || entry.resetAt <= now) {
+      if (this.hits.size >= this.maxKeys) {
+        for (const [k, v] of this.hits) {
+          if (v.resetAt <= now) this.hits.delete(k);
+        }
+        if (this.hits.size >= this.maxKeys) {
+          const oldest = this.hits.keys().next().value as string | undefined;
+          if (oldest) this.hits.delete(oldest);
+        }
+      }
+      entry = { n: 0, resetAt: now + this.windowMs };
+      this.hits.set(key, entry);
+    }
+    if (entry.n >= this.limit) {
+      return { ok: false, retryAfterMs: Math.max(1, entry.resetAt - now) };
+    }
+    entry.n++;
+    return { ok: true };
+  }
+}
+
+export interface Registration {
+  name: string;
+  redirectUris: string[];
+}
+
+/** Validate and bound every attacker-controlled value persisted by DCR. */
+export function parseRegistration(body: any): Registration {
+  const uris: unknown = body?.redirect_uris;
+  if (!Array.isArray(uris) || uris.length === 0 || uris.length > MAX_REDIRECT_URIS) {
+    throw new Error(`redirect_uris must contain 1-${MAX_REDIRECT_URIS} URLs`);
+  }
+
+  const redirectUris: string[] = [];
+  for (const value of uris) {
+    const uri = String(value);
+    if (uri.length > MAX_REDIRECT_URI) throw new Error('redirect_uri is too long');
+    let parsed: URL;
+    try {
+      parsed = new URL(uri);
+    } catch {
+      throw new Error('redirect_uri is not a URL');
+    }
+    const loopback = parsed.hostname === '127.0.0.1' ||
+      parsed.hostname === 'localhost' || parsed.hostname === '::1';
+    if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback)) {
+      throw new Error('redirect_uris must be https (or http on loopback)');
+    }
+    if (parsed.hash) throw new Error('redirect_uris must not contain fragments');
+    redirectUris.push(uri);
+  }
+
+  const rawName = String(body?.client_name ?? 'unnamed');
+  if (rawName.length > MAX_CLIENT_NAME) throw new Error('client_name is too long');
+  // Keep durable logs single-line and free of terminal control characters.
+  const name = rawName.replace(/[\p{Cc}\p{Cf}]/gu, ' ').trim() || 'unnamed';
+  return { name, redirectUris };
+}
+
+function pruneClients(db: DatabaseSync): void {
+  const now = Date.now();
+  // Never-approved registrations are expendable after a day. Clients whose last
+  // token expired are retained for 90 days so reconnecting clients remain stable.
+  db.prepare(`
+    DELETE FROM clients
+    WHERE created_at < ?
+      AND NOT EXISTS (SELECT 1 FROM tokens t WHERE t.client_id = clients.client_id)
+  `).run(now - 24 * 60 * 60 * 1000);
+  db.prepare(`
+    DELETE FROM clients
+    WHERE created_at < ?
+      AND NOT EXISTS (
+        SELECT 1 FROM tokens t
+        WHERE t.client_id = clients.client_id AND t.revoked = 0 AND t.expires_at > ?
+      )
+  `).run(now - 90 * 24 * 60 * 60 * 1000, now);
+}
+
 export function mountOAuth(app: express.Express, deps: OAuthDeps): void {
   const db = openOAuthDb();
   shared = db;
   const attempts = new Attempts();
+  const registrations = new FixedWindowLimiter(
+    REGISTRATIONS_PER_WINDOW,
+    REGISTRATION_WINDOW_MS,
+  );
   const form = express.urlencoded({ extended: false, limit: '64kb' });
   const json = express.json({ limit: '64kb' });
 
@@ -207,46 +339,61 @@ export function mountOAuth(app: express.Express, deps: OAuthDeps): void {
 
   // --- dynamic client registration (RFC 7591) --------------------------------
 
-  app.post('/register', json, (req, res) => {
-    const body = (req.body ?? {}) as any;
-    const uris: unknown = body.redirect_uris;
-    if (!Array.isArray(uris) || uris.length === 0) {
-      res.status(400).json({ error: 'invalid_redirect_uri', error_description: 'redirect_uris required' });
+  const registrationLimit: express.RequestHandler = (req, res, next) => {
+    const result = registrations.take(req.ip ?? 'unknown');
+    if (!result.ok) {
+      res.setHeader('Retry-After', String(Math.ceil(result.retryAfterMs / 1000)));
+      res.status(429).json({ error: 'too_many_requests' });
       return;
     }
-    for (const u of uris) {
-      let parsed: URL;
-      try {
-        parsed = new URL(String(u));
-      } catch {
-        res.status(400).json({ error: 'invalid_redirect_uri', error_description: `not a URL: ${u}` });
-        return;
-      }
-      // No open redirects and no javascript: URIs. Loopback is allowed for local
-      // clients; everything else must be https.
-      const loopback = parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost' || parsed.hostname === '::1';
-      if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback)) {
-        res.status(400).json({
-          error: 'invalid_redirect_uri',
-          error_description: 'redirect_uris must be https (or http on loopback)',
-        });
-        return;
-      }
+    next();
+  };
+
+  app.post('/register', registrationLimit, json, (req, res) => {
+    let registration: Registration;
+    try {
+      registration = parseRegistration(req.body ?? {});
+    } catch (e) {
+      res.status(400).json({
+        error: 'invalid_client_metadata',
+        error_description: (e as Error).message,
+      });
+      return;
+    }
+
+    pruneClients(db);
+    let count = Number((db.prepare('SELECT COUNT(*) c FROM clients').get() as any).c);
+    if (count >= MAX_CLIENTS) {
+      db.prepare(`
+        DELETE FROM clients WHERE client_id IN (
+          SELECT c.client_id FROM clients c
+          WHERE NOT EXISTS (SELECT 1 FROM tokens t WHERE t.client_id = c.client_id)
+          ORDER BY c.created_at ASC LIMIT 20
+        )
+      `).run();
+      count = Number((db.prepare('SELECT COUNT(*) c FROM clients').get() as any).c);
+    }
+    if (count >= MAX_CLIENTS) {
+      res.status(503).json({
+        error: 'temporarily_unavailable',
+        error_description: 'client registration capacity reached',
+      });
+      return;
     }
 
     const clientId = randomBytes(16).toString('hex');
     db.prepare('INSERT INTO clients (client_id, name, redirect_uris, created_at) VALUES (?,?,?,?)')
-      .run(clientId, String(body.client_name ?? 'unnamed'), JSON.stringify(uris.map(String)), Date.now());
+      .run(clientId, registration.name, JSON.stringify(registration.redirectUris), Date.now());
 
-    console.error(`oauth: registered client ${clientId} (${body.client_name ?? 'unnamed'})`);
-    emit('oauth', `client registered: ${String(body.client_name ?? 'unnamed')}`, {
+    console.error(`oauth: registered client ${clientId} (${registration.name})`);
+    emit('oauth', `client registered: ${registration.name}`, {
       detail: { client_id: clientId },
     });
     res.status(201).json({
       client_id: clientId,
       client_id_issued_at: Math.floor(Date.now() / 1000),
-      redirect_uris: uris,
-      client_name: body.client_name ?? 'unnamed',
+      redirect_uris: registration.redirectUris,
+      client_name: registration.name,
       grant_types: ['authorization_code', 'refresh_token'],
       response_types: ['code'],
       token_endpoint_auth_method: 'none',
@@ -294,6 +441,11 @@ export function mountOAuth(app: express.Express, deps: OAuthDeps): void {
     const challenge = String(q.code_challenge ?? '');
     if (challenge.length < 43) return { ok: false, msg: 'Missing or malformed code_challenge.' };
 
+    const requestedScope = String(q.scope ?? SCOPE).trim() || SCOPE;
+    if (requestedScope !== SCOPE) {
+      return { ok: false, msg: `Only scope=${SCOPE} is supported.` };
+    }
+
     return {
       ok: true,
       req: {
@@ -302,7 +454,7 @@ export function mountOAuth(app: express.Express, deps: OAuthDeps): void {
         state: String(q.state ?? ''),
         challenge,
         resource: String(q.resource ?? ''),
-        scope: String(q.scope ?? SCOPE),
+        scope: requestedScope,
       },
     };
   }
@@ -313,12 +465,8 @@ export function mountOAuth(app: express.Express, deps: OAuthDeps): void {
      * one of them — and a missing redirect_origin does not fail loudly, it just
      * makes the approve button do nothing (see the CSP comment in consent.html).
      */
-    let redirectOrigin = "'none'";
-    try {
-      redirectOrigin = new URL(vars.redirect_uri).origin;
-    } catch {
-      /* unparseable redirect_uri never reaches here; parseAuthRequest rejects it */
-    }
+    const { redirectOrigin, headers } = consentSecurityHeaders(vars.redirect_uri);
+    for (const [name, value] of Object.entries(headers)) res.setHeader(name, value);
     let html = CONSENT_HTML.replaceAll('{{redirect_origin}}', escapeHtml(redirectOrigin));
     for (const [k, v] of Object.entries(vars)) {
       // Values are escaped before substitution; they end up inside HTML attributes
@@ -434,6 +582,17 @@ export function mountOAuth(app: express.Express, deps: OAuthDeps): void {
     const access = randomBytes(32).toString('base64url');
     const refresh = randomBytes(32).toString('base64url');
     const now = Date.now();
+    db.prepare('DELETE FROM tokens WHERE revoked = 1 OR expires_at < ?').run(now);
+    // A buggy or hostile client may refresh in a tight loop. Keep the database
+    // and the number of simultaneously valid access tokens bounded per client.
+    db.prepare(`
+      DELETE FROM tokens WHERE token_hash IN (
+        SELECT token_hash FROM tokens
+        WHERE client_id = ? AND kind = 'access'
+        ORDER BY created_at DESC
+        LIMIT -1 OFFSET ?
+      )
+    `).run(clientId, MAX_ACCESS_TOKENS_PER_CLIENT - 1);
     const ins = db.prepare(`
       INSERT INTO tokens (token_hash, client_id, kind, scope, resource, expires_at, revoked, created_at)
       VALUES (?,?,?,?,?,?,0,?)
@@ -508,7 +667,7 @@ export function mountOAuth(app: express.Express, deps: OAuthDeps): void {
       }
       // Rotate: the presented refresh token is burned as it is exchanged, so a
       // stolen copy is usable at most once and its use invalidates the real one.
-      db.prepare('UPDATE tokens SET revoked = 1 WHERE token_hash = ?').run(sha256(rt));
+      db.prepare('DELETE FROM tokens WHERE token_hash = ?').run(sha256(rt));
       emit('oauth', 'access token refreshed (old one rotated out)', {
         detail: { client_id: row.client_id },
       });
@@ -528,7 +687,9 @@ export function mountOAuth(app: express.Express, deps: OAuthDeps): void {
 
   // Housekeeping on boot; these tables are tiny and this keeps them that way.
   db.prepare('DELETE FROM codes WHERE expires_at < ?').run(Date.now() - 3600_000);
-  db.prepare("DELETE FROM tokens WHERE expires_at < ? AND kind = 'access'").run(Date.now() - 86_400_000);
+  db.prepare('DELETE FROM tokens WHERE expires_at < ? OR revoked = 1').run(Date.now());
+  pruneClients(db);
+  db.prepare('DELETE FROM tokens WHERE client_id NOT IN (SELECT client_id FROM clients)').run();
 }
 
 /**
@@ -548,7 +709,7 @@ export function validateAccessToken(token: string): { client_id: string; scope: 
     "SELECT client_id, scope, expires_at, revoked FROM tokens WHERE token_hash = ? AND kind = 'access'",
   ).get(sha256(token)) as any;
 
-  if (!row || row.revoked || row.expires_at < Date.now()) return null;
+  if (!row || row.revoked || row.expires_at < Date.now() || row.scope !== SCOPE) return null;
   return { client_id: row.client_id, scope: row.scope };
 }
 

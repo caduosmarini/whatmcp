@@ -1,9 +1,15 @@
 import { DatabaseSync } from 'node:sqlite';
-import { existsSync, mkdirSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { migrate, currentVersion, targetVersion } from './migrate.ts';
 
 export type DB = DatabaseSync;
+
+function hardenStoreFiles(path: string): void {
+  for (const file of [path, `${path}-wal`, `${path}-shm`]) {
+    if (existsSync(file)) chmodSync(file, 0o600);
+  }
+}
 
 /** Open the archive for writing, creating and migrating it if needed. */
 export function openStore(path: string): DB {
@@ -16,6 +22,7 @@ export function openStore(path: string): DB {
   db.exec('PRAGMA journal_mode = WAL');
   db.exec('PRAGMA foreign_keys = ON');
   db.exec('PRAGMA synchronous = NORMAL');
+  hardenStoreFiles(path);
   migrate(db);
   return db;
 }
@@ -39,6 +46,7 @@ export function openStoreRO(path: string): DB {
     );
   }
 
+  hardenStoreFiles(path);
   const db = new DatabaseSync(path, { readOnly: true });
   const have = currentVersion(db);
   const want = targetVersion();

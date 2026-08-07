@@ -29,6 +29,7 @@ import { embedMissing, vectorCoverage, estimatePending } from './index/embed.ts'
 import { openStore } from './db/index.ts';
 import { embed as apiEmbed } from './index/openai.ts';
 import { calibrateThresholds } from './search/calibrate.ts';
+import { createSecretOutput } from './secret-input.ts';
 
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
@@ -57,7 +58,7 @@ export async function runSetup(): Promise<void> {
     console.error(
       'npm run setup needs an interactive terminal.\n\n' +
       'Non-interactive equivalent:\n' +
-      '  npm run wa -- set-key sk-...\n' +
+      '  npm run wa -- set-key < /path/to/protected-key-file\n' +
       '  npm run sync\n' +
       '  npm run wa -- calibrate\n' +
       '  npm run wa -- sync-every 6      # background sync, 0 to disable',
@@ -66,7 +67,8 @@ export async function runSetup(): Promise<void> {
     return;
   }
 
-  const rl = createInterface({ input: stdin, output: stdout });
+  const secretOutput = createSecretOutput(stdout);
+  const rl = createInterface({ input: stdin, output: secretOutput.stream, terminal: true });
   /*
    * Resolve pending questions if the interface closes underneath us (Ctrl-D,
    * or a terminal that goes away), rather than hanging on a promise nobody will
@@ -79,6 +81,7 @@ export async function runSetup(): Promise<void> {
     return (await rl.question(q)).trim();
   };
   const ask = async (q: string, fallback = '') => (await askRaw(q)) || fallback;
+  const askSecret = async (q: string) => closed ? '' : secretOutput.question(rl, q);
   const confirm = async (q: string, def = true) => {
     const a = (await askRaw(`${q} ${def ? '[Y/n]' : '[y/N]'} `)).toLowerCase();
     if (!a) return def;
@@ -115,9 +118,9 @@ export async function runSetup(): Promise<void> {
     );
     if (cfg.openaiKey) {
       console.log(`  already configured: ${maskKey(cfg.openaiKey)}`);
-      if (await confirm('  Replace it?', false)) cfg = await promptKey(ask);
+      if (await confirm('  Replace it?', false)) cfg = await promptKey(askSecret);
     } else {
-      cfg = await promptKey(ask);
+      cfg = await promptKey(askSecret);
     }
     if (!cfg.openaiKey) {
       console.log(yellow('\nNo key set. You can still index and use keyword search:'));
@@ -262,11 +265,11 @@ export async function runSetup(): Promise<void> {
   }
 }
 
-async function promptKey(ask: (q: string, f?: string) => Promise<string>) {
+async function promptKey(askSecret: (q: string) => Promise<string>) {
   console.log(dim('  Get one at https://platform.openai.com/api-keys'));
-  const key = await ask('  Paste your OpenAI API key (sk-...): ');
+  const key = await askSecret('  Paste your OpenAI API key (input hidden): ');
   if (!key) return loadConfig();
-  if (!key.startsWith('sk-')) {
+  if (!/^sk-[^\s]+$/.test(key)) {
     console.log(red('  That does not look like an OpenAI key (expected it to start with "sk-").'));
     return loadConfig();
   }
