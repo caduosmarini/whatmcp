@@ -3,19 +3,19 @@
 
 import { runIndex } from './index/indexer.ts';
 import { embedMissing, vectorCoverage, type ProgressEvent } from './index/embed.ts';
-import { modelTag, embed as apiEmbed } from './index/openai.ts';
+import { modelTag } from './index/openai.ts';
 import {
   searchHybrid, listThreads, listPeople, getConversation, stats,
   type SearchContext,
 } from './search/search.ts';
 import { openStore } from './db/index.ts';
 import { getStore } from './store.ts';
-import { topKCosine } from './search/vectors.ts';
 import * as wa from './whatsapp/source.ts';
 import {
   loadConfig, embedConfig, writeFileConfig, maskKey, requireKey,
-  CONFIG_PATH, DATA_DIR, ensureDataDir,
+  CONFIG_PATH, DATA_DIR, ensureDataDir, type Config,
 } from './config.ts';
+import { calibrateThresholds, NOISE_PROBES } from './search/calibrate.ts';
 import { existsSync, statSync, rmSync, readFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -61,6 +61,34 @@ function onProgress(e: ProgressEvent) {
         `${e.tokens.toLocaleString()} tokens, $${e.costUSD.toFixed(4)}` +
         (e.truncated ? `  (${e.truncated} truncated)` : ''),
     );
+  }
+}
+
+/**
+ * Fit thresholds the first time an archive acquires vectors.
+ *
+ * `setup` calibrates right after the embed it runs itself, but that is only the
+ * happy path: anyone who answers "no" to the one prompt that costs money and
+ * embeds later via `embed` or `sync` would otherwise be left on the compiled-in
+ * defaults forever. Those defaults are a guess against an unknown corpus, and
+ * when they are wrong the vector arm silently returns nothing — search still
+ * reports results, just keyword-only ones, which reads as "this doesn't work"
+ * rather than "this needs one more command".
+ *
+ * Only fires when the thresholds have never been written, so it never overrides
+ * a value someone tuned by hand.
+ */
+async function calibrateIfUnset(cfg: Config, embedded: number): Promise<void> {
+  if (cfg.strongSim !== undefined || embedded === 0) return;
+  process.stdout.write('  fitting relevance thresholds to this corpus… ');
+  try {
+    const r = await calibrateThresholds(cfg);
+    console.log(r ? `strong=${r.strong} min=${r.minSim}` : 'skipped (no vectors)');
+  } catch (e) {
+    // Never fail an otherwise-successful embed over a tuning pass. The archive is
+    // built and usable; `calibrate` can be re-run at any time.
+    console.log(`skipped (${(e as Error).message})`);
+    console.log(dim('  run `npm run wa -- calibrate` once the API is reachable'));
   }
 }
 
@@ -241,6 +269,7 @@ switch (cmd) {
     const cov = vectorCoverage(db, ec);
     db.close();
     console.log(`  coverage: ${cov.embedded}/${cov.windows} (${cov.pct}%)`);
+    await calibrateIfUnset(cfg, cov.embedded);
     break;
   }
 
@@ -266,10 +295,9 @@ switch (cmd) {
     const db = openStore(cfg.store);
     const cov = vectorCoverage(db, ec);
     db.close();
-    console.log(
-      `  coverage: ${cov.embedded}/${cov.windows} (${cov.pct}%)\n` +
-        `done in ${((Date.now() - t0) / 1000).toFixed(1)}s`,
-    );
+    console.log(`  coverage: ${cov.embedded}/${cov.windows} (${cov.pct}%)`);
+    await calibrateIfUnset(cfg, cov.embedded);
+    console.log(`done in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
     break;
   }
 
@@ -442,51 +470,27 @@ switch (cmd) {
       console.error('no vectors in the archive yet — run: npm run wa -- sync');
       process.exit(1);
     }
-    const ix = store.vectors;
-
-    const NOISE = [
-      'lattice gauge theory in quantum chromodynamics',
-      'sourdough starter hydration ratio troubleshooting',
-      'Tokyo subway fare adjustment machine instructions',
-      'crop rotation practices in medieval Flanders',
-      'tuning valve clearance on a diesel tractor engine',
-      'Byzantine fault tolerance in distributed consensus',
-      'care instructions for a tropical saltwater reef aquarium',
-      'municipal zoning variance appeal procedure',
-    ];
-
-    console.log(`probing ${ix.n} vectors with ${NOISE.length} out-of-domain queries…`);
-    const top1: number[] = [];
-    const p100: number[] = [];
-    for (const q of NOISE) {
-      const { vectors } = await apiEmbed(ec, [q]);
-      const hits = topKCosine(ix, vectors[0], 100);
-      if (hits.length === 0) continue;
-      top1.push(hits[0].sim);
-      p100.push(hits[hits.length - 1].sim);
-      console.log(
-        `  ${hits[0].sim.toFixed(3)}  ${dim(hits[hits.length - 1].sim.toFixed(3))}  ${q}`,
-      );
-    }
-
-    const max = (a: number[]) => a.reduce((x, y) => Math.max(x, y), -Infinity);
-    const mean = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length;
-
-    // A hit must beat the best match nonsense could find before it counts as
-    // evidence on its own. The margin absorbs the fact that eight probes are a
-    // sample of the noise distribution, not the whole of it.
-    const strong = Number((max(top1) + 0.02).toFixed(3));
-    // The floor only removes the pathological tail: below the *typical* 100th
-    // result of a nonsense query, a window is not plausibly about anything asked.
-    const minSim = Number(mean(p100).toFixed(3));
 
     console.log(
-      `\nnoise top-1:  max ${max(top1).toFixed(3)}  mean ${mean(top1).toFixed(3)}\n` +
-        `noise top-100: mean ${mean(p100).toFixed(3)}\n\n` +
-        `strong_sim -> ${strong}   (a hit above this beats anything nonsense retrieved)\n` +
-        `min_sim    -> ${minSim}   (floor; only drops the pathological tail)`,
+      `probing ${store.vectors.n} vectors with ${NOISE_PROBES.length} out-of-domain queries…`,
     );
-    writeFileConfig({ strong_sim: strong, min_sim: minSim });
+    const result = await calibrateThresholds(cfg, {
+      onProbe: (q, top1, p100) =>
+        console.log(`  ${top1.toFixed(3)}  ${dim(p100.toFixed(3))}  ${q}`),
+    });
+    if (!result) {
+      console.error('every probe came back empty — nothing to calibrate against');
+      process.exit(1);
+    }
+
+    const mean = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length;
+    console.log(
+      `\nnoise top-1:  max ${Math.max(...result.top1).toFixed(3)}  ` +
+        `mean ${mean(result.top1).toFixed(3)}\n` +
+        `noise top-100: mean ${mean(result.p100).toFixed(3)}\n\n` +
+        `strong_sim -> ${result.strong}   (a hit above this beats anything nonsense retrieved)\n` +
+        `min_sim    -> ${result.minSim}   (floor; only drops the pathological tail)`,
+    );
     console.log(`\nwritten to ${CONFIG_PATH}`);
     break;
   }

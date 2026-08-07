@@ -3,7 +3,7 @@
 A local MCP server over a local, durable archive of your WhatsApp history.
 
 ```bash
-git clone <this repo> && cd WhatMCP
+git clone https://github.com/pedroschott/whatmcp.git && cd whatmcp
 npm install
 npm run setup     # checks permissions, takes your API key, builds and embeds the archive
 ```

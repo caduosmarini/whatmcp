@@ -27,9 +27,8 @@ import { runPreflight } from './preflight.ts';
 import { runIndex } from './index/indexer.ts';
 import { embedMissing, vectorCoverage, estimatePending } from './index/embed.ts';
 import { openStore } from './db/index.ts';
-import { modelTag, embed as apiEmbed } from './index/openai.ts';
-import { getStore } from './store.ts';
-import { topKCosine } from './search/vectors.ts';
+import { embed as apiEmbed } from './index/openai.ts';
+import { calibrateThresholds } from './search/calibrate.ts';
 
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
@@ -288,39 +287,22 @@ async function promptKey(ask: (q: string, f?: string) => Promise<string>) {
 /**
  * Fit the similarity thresholds to this corpus.
  *
- * Runs automatically after the first embed because the defaults in code are a
- * guess and the difference is not subtle — on the reference corpus the measured
- * value was 0.306 against a hard-coded 0.42, which would have marked almost
- * nothing as a confident match.
+ * Runs right after the first embed because the defaults in code are a guess and
+ * the difference is not subtle — on the reference corpus the measured value was
+ * 0.306 against a hard-coded 0.42, which would have marked almost nothing as a
+ * confident match. `embed` and `sync` do the same for anyone who defers the
+ * embed rather than running it here.
  */
 async function calibrate(cfg: ReturnType<typeof loadConfig>): Promise<void> {
-  const ec = { model: cfg.openaiModel, dimensions: cfg.openaiDims, apiKey: cfg.openaiKey! };
-  const ix = getStore(cfg.store, modelTag(ec)).vectors;
-  if (!ix) return;
-
-  const NOISE = [
-    'lattice gauge theory in quantum chromodynamics',
-    'sourdough starter hydration ratio troubleshooting',
-    'Tokyo subway fare adjustment machine instructions',
-    'crop rotation practices in medieval Flanders',
-    'Byzantine fault tolerance in distributed consensus',
-    'care instructions for a tropical saltwater reef aquarium',
-  ];
   process.stdout.write('  calibrating relevance thresholds… ');
-  const top1: number[] = [];
-  const p100: number[] = [];
-  for (const q of NOISE) {
-    const { vectors } = await apiEmbed(ec, [q]);
-    const hits = topKCosine(ix, vectors[0], 100);
-    if (!hits.length) continue;
-    top1.push(hits[0].sim);
-    p100.push(hits[hits.length - 1].sim);
+  try {
+    const r = await calibrateThresholds(cfg);
+    console.log(r ? green(`strong=${r.strong} min=${r.minSim}`) : dim('skipped (no vectors)'));
+  } catch (e) {
+    // A tuning pass is not worth failing setup over; the archive is already built.
+    console.log(yellow(`skipped (${(e as Error).message})`));
+    console.log(dim('  run `npm run wa -- calibrate` later'));
   }
-  if (!top1.length) return;
-  const strong = Number((Math.max(...top1) + 0.02).toFixed(3));
-  const minSim = Number((p100.reduce((a, b) => a + b, 0) / p100.length).toFixed(3));
-  writeFileConfig({ strong_sim: strong, min_sim: minSim });
-  console.log(green(`strong=${strong} min=${minSim}`));
 }
 
 /** Render and load the periodic-sync LaunchAgent. */
