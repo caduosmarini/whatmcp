@@ -12,6 +12,9 @@ npm run setup     # checks permissions, takes your API key, builds and embeds th
 one-time embedding will cost (cents, for a nine-year history). If anything is
 wrong with the machine it says exactly what to fix.
 
+<img width="653" height="381" alt="file-e6e5a56497e3ab9e15559e8d93e58d4c" src="https://github.com/user-attachments/assets/6ee373f8-84c0-4f94-b8ec-d1d5e52d2ec3" />
+
+
 Requires **macOS**, **Node >= 22.6**, and **WhatsApp Desktop signed in**.
 
 > **Full Disk Access is the one thing that trips everyone up.** WhatsApp's
@@ -230,6 +233,9 @@ information about you.
 
 ### Dashboard
 
+<img width="1076" height="807" alt="file-15e5aefb383b38170ba8aa618328cf86" src="https://github.com/user-attachments/assets/721f529a-41e2-4a56-94a3-0dff07302a93" />
+
+
 With the HTTP server running, open **http://127.0.0.1:8787/** — live archive
 stats, freshness against WhatsApp, a *Sync now* button that streams progress, and
 a search box showing strong/weak labels with the underlying BM25 rank, vector
@@ -289,9 +295,12 @@ Once public, **the bearer token is the only thing between the internet and the
 archive.** Rotate it with `npm run wa -- http-token` (restart the server after),
 and take the whole endpoint down with `bash deploy/uninstall.sh`.
 
-### ChatGPT
+### ChatGPT / Claude App
 
-ChatGPT refuses static bearer tokens: custom MCP connectors require OAuth with
+<img width="804" height="605" alt="file-9230d905315a60846f41531de5708a20" src="https://github.com/user-attachments/assets/18c867c0-5959-48b6-a20d-b0d65a925ea0" />
+
+
+ChatGPT and Claude refuses static bearer tokens: custom MCP connectors require OAuth with
 dynamic client registration and PKCE, and it will not do machine-to-machine
 grants. So the HTTP server ships an OAuth 2.1 authorization server
 (`src/mcp/oauth.ts`) alongside the static-token path, which keeps working
