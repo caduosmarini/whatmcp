@@ -27,9 +27,10 @@
   only to a destination the server already decided to trust.
 -->
 <meta http-equiv="Content-Security-Policy"
-      content="default-src 'none'; style-src 'unsafe-inline'; form-action 'self' {{redirect_origin}}">
+      content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self' {{redirect_origin}}">
 <meta name="referrer" content="no-referrer">
 <title>Authorize access</title>
+<link rel="icon" type="image/png" href="/favicon.png">
 <style>
   :root {
     --bg: #fbfbfa; --panel: #fff; --ink: #1c1c1a; --muted: #6b6b66;

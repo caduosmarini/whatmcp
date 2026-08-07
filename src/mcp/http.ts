@@ -33,7 +33,8 @@ import { mountDashboard } from './dashboard.ts';
 import { mountOAuth, validateAccessToken } from './oauth.ts';
 import { emit } from './events.ts';
 import { stats } from '../search/search.ts';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 const cfg = loadConfig();
 const file = readFileConfig();
@@ -220,6 +221,29 @@ function guard(req: express.Request, res: express.Response): boolean {
  */
 // The dashboard posts JSON on /api/*; mount the parser for those routes only.
 app.use('/api', jsonBody);
+
+/*
+ * The app icon, served same-origin.
+ *
+ * Public rather than loopback-only, deliberately: the OAuth consent page IS
+ * public — ChatGPT redirects a browser to it — so a loopback-only icon would
+ * show as broken there. It reveals nothing the consent page does not already
+ * state outright.
+ *
+ * Served as a route rather than inlined as a data: URI so both pages can keep
+ * `img-src 'self'` instead of allowing data: URIs wholesale, and so the icon
+ * stays a file that can be replaced without editing HTML.
+ */
+const FAVICON = readFileSync(join(import.meta.dirname, '../../assets/whatmcp.png'));
+const sendIcon = (_req: express.Request, res: express.Response) => {
+  res.setHeader('Content-Type', 'image/png');
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  res.end(FAVICON);
+};
+app.get('/favicon.png', sendIcon);
+// Browsers request /favicon.ico unprompted; answering with the same bytes beats
+// logging a 404 on every page load.
+app.get('/favicon.ico', sendIcon);
 
 app.get('/health', (_req, res) => {
   res.json({ ok: existsSync(cfg.store), service: 'whatmcp' });
