@@ -95,16 +95,23 @@ const expected = Buffer.from(TOKEN);
  * Both land in the same Authorization: Bearer header, so this cannot be told
  * apart by shape; it tries one, then the other.
  */
-function authorized(req: express.Request): boolean {
+type Principal =
+  | { kind: 'static' }
+  | { kind: 'oauth'; clientId: string; scope: string };
+
+function principalFor(req: express.Request): Principal | null {
   const header = req.get('authorization') ?? '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : '';
-  if (!token) return false;
+  if (!token) return null;
 
   const got = Buffer.from(token);
   // Length check first: timingSafeEqual throws on mismatched lengths.
-  if (got.length === expected.length && timingSafeEqual(got, expected)) return true;
+  if (got.length === expected.length && timingSafeEqual(got, expected)) return { kind: 'static' };
 
-  return validateAccessToken(token) !== null;
+  const oauth = validateAccessToken(token);
+  return oauth
+    ? { kind: 'oauth', clientId: oauth.client_id, scope: oauth.scope }
+    : null;
 }
 
 /**
@@ -184,7 +191,7 @@ function guard(req: express.Request, res: express.Response): boolean {
     });
     return false;
   }
-  if (!authorized(req)) {
+  if (!principalFor(req)) {
     console.error(`auth failure from ${req.ip} at ${new Date().toISOString()}`);
     emit('auth', 'rejected an unauthenticated /mcp request', {
       level: 'warn',
@@ -212,6 +219,10 @@ function guard(req: express.Request, res: express.Response): boolean {
   return true;
 }
 
+const guarded: express.RequestHandler = (req, res, next) => {
+  if (guard(req, res)) next();
+};
+
 /**
  * Liveness only, and deliberately contentless.
  *
@@ -219,9 +230,6 @@ function guard(req: express.Request, res: express.Response): boolean {
  * leak real information about the owner — that they have 50k messages going back
  * to 2017 is not nothing. Counts require the token.
  */
-// The dashboard posts JSON on /api/*; mount the parser for those routes only.
-app.use('/api', jsonBody);
-
 /*
  * The app icon, served same-origin.
  *
@@ -271,11 +279,11 @@ app.get('/status', (req, res) => {
  * there is no session table to exhaust or leak, and no cross-request state for one
  * caller to observe from another.
  */
-app.post('/mcp', jsonBody, async (req, res) => {
-  if (!guard(req, res)) return;
+app.post('/mcp', guarded, jsonBody, async (req, res) => {
   // Which credential was used matters: it distinguishes a ChatGPT session from
   // Claude Code, which is otherwise invisible once both are just Bearer headers.
-  const viaOAuth = validateAccessToken((req.get('authorization') ?? '').slice(7)) !== null;
+  const principal = principalFor(req)!;
+  const viaOAuth = principal.kind === 'oauth';
   const method = (req.body as any)?.method;
   if (method && method !== 'initialize') {
     emit('mcp', `${method} via ${viaOAuth ? 'OAuth' : 'static token'}`, {
@@ -283,7 +291,14 @@ app.post('/mcp', jsonBody, async (req, res) => {
     });
   }
 
-  const server = buildServer({ cfg, embedCfg, keyError });
+  const server = buildServer({
+    cfg,
+    embedCfg,
+    keyError,
+    // OAuth consent grants whatmcp:read only. The static operator token retains
+    // the historical sync capability; the local dashboard has its own sync gate.
+    allowSync: principal.kind === 'static',
+  });
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
 
   res.on('close', () => {

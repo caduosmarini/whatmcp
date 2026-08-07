@@ -108,15 +108,16 @@ and no legitimate MCP client is a web page.
 at boot. The server refuses to start unauthenticated rather than degrading to
 open.
 
-**4. Rate limiting on the consent form.** `/authorize` is the one deliberately
-public browser surface — ChatGPT redirects *your browser* to it, so it cannot be
-loopback-only. It allows 5 free attempts per IP, then locks that IP out with
-exponential backoff capped at 15 minutes, logging every rejection. The token is
-256 bits, so arithmetic is what makes guessing infeasible; the limiter exists so
-a sustained campaign is visible and cheap to absorb rather than an unbounded
-flood against a constant-time compare. Attribution is per real client IP —
-`trust proxy` is set to loopback so `cloudflared`'s `X-Forwarded-For` is honoured
-but nothing else can forge it.
+**4. Public OAuth abuse controls.** `/authorize` is the one deliberately public
+browser surface — ChatGPT redirects *your browser* to it, so it cannot be
+loopback-only. It allows 5 free token attempts per IP, then locks that IP out with
+exponential backoff capped at 15 minutes. Dynamic client registration is limited
+to 10 attempts per IP per hour, bounds names and redirect lists, caps total stored
+clients, prunes stale registrations, and never logs raw control characters or
+unbounded names. The token is 256 bits, so arithmetic is what makes guessing
+infeasible; these limits keep public endpoints cheap to absorb. Attribution is per
+real client IP — `trust proxy` is set to loopback so `cloudflared`'s
+`X-Forwarded-For` is honoured but nothing else can forge it.
 
 **5. The dashboard is loopback-only, enforced in code.** A tunnel forwards
 *everything* on `127.0.0.1:8787`, so the dashboard would otherwise go public the
@@ -132,7 +133,9 @@ downgrade), `redirect_uri` matched exactly (prefix matching is how these become
 open redirects), codes single-use with a 60-second TTL bound to client, redirect
 URI, challenge and resource, refresh tokens rotated on every use, and codes and
 tokens stored only as SHA-256 hashes — a leaked `oauth.db` is not a leaked
-archive.
+archive. Consent responses deny framing and caching. OAuth grants are strictly
+`whatmcp:read` and do not expose `sync_archive`, which writes locally and calls the
+embeddings API.
 
 **Not included: TLS.** This server does not terminate it. That is the tunnel's
 job, which is why binding a public interface directly prints a warning instead of

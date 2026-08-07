@@ -23,7 +23,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import type express from 'express';
+import express from 'express';
 
 import type { Config } from '../config.ts';
 import { runIndex } from '../index/indexer.ts';
@@ -84,6 +84,7 @@ function safeEqual(a: string, b: string): boolean {
 
 export function mountDashboard(app: express.Express, deps: DashboardDeps): void {
   const { cfg, embedCfg, token, port } = deps;
+  const json = express.json({ limit: '64kb' });
 
   const ctx = (): SearchContext => ({
     storePath: cfg.store,
@@ -142,17 +143,25 @@ export function mountDashboard(app: express.Express, deps: DashboardDeps): void 
     return true;
   }
 
-  app.get('/', (req, res) => {
-    if (!loopbackOnly(req, res)) return;
-    res.type('html').send(HTML);
-  });
-
-  app.post('/api/login', (req, res) => {
+  const loginGate: express.RequestHandler = (req, res, next) => {
     if (!loopbackOnly(req, res)) return;
     if (!originOk(req)) {
       res.status(403).json({ error: 'bad origin' });
       return;
     }
+    next();
+  };
+
+  const authenticated: express.RequestHandler = (req, res, next) => {
+    if (auth(req, res)) next();
+  };
+
+  app.get('/', (req, res) => {
+    if (!loopbackOnly(req, res)) return;
+    res.type('html').send(HTML);
+  });
+
+  app.post('/api/login', loginGate, json, (req, res) => {
     const supplied = String((req.body as any)?.token ?? '');
     if (!supplied || !safeEqual(supplied, token)) {
       console.error(`dashboard auth failure from ${req.ip} at ${new Date().toISOString()}`);
@@ -169,7 +178,7 @@ export function mountDashboard(app: express.Express, deps: DashboardDeps): void 
     res.json({ ok: true });
   });
 
-  app.post('/api/logout', (req, res) => {
+  app.post('/api/logout', authenticated, (req, res) => {
     const sid = readCookie(req, COOKIE);
     if (sid) sessions.delete(sid);
     res.setHeader('Set-Cookie', `${COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`);
@@ -286,8 +295,7 @@ export function mountDashboard(app: express.Express, deps: DashboardDeps): void 
    */
   let syncing = false;
 
-  app.post('/api/sync', async (req, res) => {
-    if (!auth(req, res)) return;
+  app.post('/api/sync', authenticated, json, async (req, res) => {
     if (syncing) {
       res.status(409).json({ error: 'a sync is already running' });
       return;

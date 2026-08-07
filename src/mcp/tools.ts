@@ -41,6 +41,8 @@ export interface ToolDeps {
   /** Null when no API key is configured; every tool then explains itself. */
   embedCfg: { model: string; dimensions: number; apiKey: string } | null;
   keyError: string | null;
+  /** OAuth read grants omit the one tool that writes and sends data externally. */
+  allowSync?: boolean;
 }
 
 const iso = (ts: number) => new Date(ts * 1000).toISOString();
@@ -473,55 +475,56 @@ export function buildServer(deps: ToolDeps): McpServer {
     },
   );
 
-  traced(
-    'sync_archive',
-    {
-      title: 'Sync archive',
-      description:
-        'Bring the local archive up to date with WhatsApp Desktop: index new ' +
-        'messages, then embed anything missing. Read-only with respect to WhatsApp ' +
-        'itself — it copies and reads, and never writes or sends. Takes seconds for ' +
-        'a routine catch-up. Use when get_archive_status reports the archive is ' +
-        'behind, or when a search for something recent finds nothing.',
-      inputSchema: {
-        full: z.boolean().optional()
-          .describe('Re-read the entire WhatsApp store rather than only new messages. ' +
-                    'Slower; catches edits. Never deletes archived messages.'),
+  if (deps.allowSync !== false) {
+    traced(
+      'sync_archive',
+      {
+        title: 'Sync archive',
+        description:
+          'Bring the local archive up to date with WhatsApp Desktop: index new ' +
+          'messages, then embed anything missing. Read-only with respect to WhatsApp ' +
+          'itself — it copies and reads, and never writes or sends. Takes seconds for ' +
+          'a routine catch-up. Use when get_archive_status reports the archive is ' +
+          'behind, or when a search for something recent finds nothing.',
+        inputSchema: {
+          full: z.boolean().optional()
+            .describe('Re-read the entire WhatsApp store rather than only new messages. ' +
+                      'Slower; catches edits. Never deletes archived messages.'),
+        },
+        // Not read-only: it writes to the archive and calls the embeddings API.
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
       },
-      // Not read-only: it writes to the local archive. It still cannot touch
-      // WhatsApp, and it is not destructive — the archive only ever grows.
-      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-    },
-    async ({ full }) => {
-      if (!embedCfg) return text(keyMissing());
+      async ({ full }) => {
+        if (!embedCfg) return text(keyMissing());
 
-      const notes: string[] = [];
-      const r = runIndex(cfg.store, {
-        chatstorage: cfg.chatstorage,
-        full,
-        onProgress: (m) => notes.push(m),
-      });
+        const notes: string[] = [];
+        const r = runIndex(cfg.store, {
+          chatstorage: cfg.chatstorage,
+          full,
+          onProgress: (m) => notes.push(m),
+        });
 
-      const e = await embedMissing(cfg.store, embedCfg, {});
-      // The cached handle and its vector matrix are stale by construction now.
-      invalidate();
+        const e = await embedMissing(cfg.store, embedCfg, {});
+        // The cached handle and its vector matrix are stale by construction now.
+        invalidate();
 
-      const s = stats(ctx());
-      return text(
-        `Sync complete (${r.fullPass ? 'full' : 'incremental'} pass).\n` +
-          (r.sourceReset
-            ? `\nNOTE: WhatsApp's local store had been rebuilt, so the archive fell back ` +
-              `to a full pass. Nothing previously archived was lost.\n`
-            : '') +
-          `  ${r.newMessages} new message(s), ${r.updatedMessages} updated\n` +
-          `  ${r.windowsBuilt} conversation window(s) built\n` +
-          `  ${e.embedded} window(s) embedded` +
-          (e.tokens ? ` (${e.tokens.toLocaleString()} tokens, $${e.costUSD.toFixed(4)})` : '') +
-          `\n  archive now holds ${s.messages} message(s) across ${s.threads} chat(s)` +
-          (notes.length ? `\n\n${notes.join('\n')}` : ''),
-      );
-    },
-  );
+        const s = stats(ctx());
+        return text(
+          `Sync complete (${r.fullPass ? 'full' : 'incremental'} pass).\n` +
+            (r.sourceReset
+              ? `\nNOTE: WhatsApp's local store had been rebuilt, so the archive fell back ` +
+                `to a full pass. Nothing previously archived was lost.\n`
+              : '') +
+            `  ${r.newMessages} new message(s), ${r.updatedMessages} updated\n` +
+            `  ${r.windowsBuilt} conversation window(s) built\n` +
+            `  ${e.embedded} window(s) embedded` +
+            (e.tokens ? ` (${e.tokens.toLocaleString()} tokens, $${e.costUSD.toFixed(4)})` : '') +
+            `\n  archive now holds ${s.messages} message(s) across ${s.threads} chat(s)` +
+            (notes.length ? `\n\n${notes.join('\n')}` : ''),
+        );
+      },
+    );
+  }
 
   return server;
 }

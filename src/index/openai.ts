@@ -124,7 +124,7 @@ async function post(cfg: EmbedConfig, input: string[], signal?: AbortSignal) {
     const body = await res.text();
     if (res.status === 401) {
       throw new Error(
-        'OpenAI rejected the API key (401). Check it with:  npm run wa -- set-key sk-...',
+        'OpenAI rejected the API key (401). Replace it with:  npm run wa -- set-key',
       );
     }
     throw new Error(`OpenAI ${res.status}: ${redact(body.slice(0, 300))}`);

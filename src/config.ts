@@ -63,6 +63,7 @@ export interface FileConfig {
 
 export function ensureDataDir(): string {
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+  chmodSync(DATA_DIR, 0o700);
   return DATA_DIR;
 }
 
@@ -146,7 +147,7 @@ export function requireKey(cfg: Config = loadConfig()): string {
   if (!cfg.openaiKey) {
     throw new Error(
       'No OpenAI API key configured.\n' +
-        `Run:  npm run wa -- set-key sk-...\n` +
+        `Run:  npm run wa -- set-key\n` +
         `(stored 0600 in ${CONFIG_PATH}; never logged, never written to the archive)`,
     );
   }

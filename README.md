@@ -133,12 +133,16 @@ cost shown before you agree), threshold calibration, and background sync.
 Prefer to do it by hand, or scripting it:
 
 ```bash
-npm run wa -- set-key sk-...   # stored 0600 in ~/.whatmcp/config.json
+npm run wa -- set-key          # hidden prompt; stored 0600 in ~/.whatmcp/config.json
 npm run sync                   # index + embed
 npm run wa -- calibrate        # fit similarity thresholds to this corpus
 npm run wa -- sync-every 6     # background sync every 6h (0 disables)
 npm run doctor                 # verify everything
 ```
+
+For automation, redirect a protected file or pipe a secret manager into
+`npm run wa -- set-key`. Keys supplied as command-line arguments are refused so
+they cannot land in shell history or the process list.
 
 Check it works before wiring up a client:
 
@@ -229,6 +233,8 @@ request, in order:
 2. **Origin rejection** — any `Origin` header means a browser sent it, and no
    legitimate MCP client is a web page.
 3. **Constant-time token comparison**, minimum 32 characters, enforced at boot.
+   Authentication runs before JSON parsing, so unauthenticated callers cannot
+   make the server buffer the 4 MB MCP body allowance.
 
 `/health` is unauthenticated but returns nothing beyond liveness; message counts
 and date ranges need the token, since "50k messages going back to 2017" is itself
@@ -328,12 +334,16 @@ The flow is standard and the guards are enforced, not assumed: PKCE S256 is
 mandatory (no `plain`), redirect URIs are matched exactly (prefix matching is how
 these become open redirects), codes are single-use with a 60-second TTL bound to
 client, redirect URI, challenge and resource, refresh tokens rotate on every use,
-and codes and tokens are stored only as SHA-256 hashes.
+and codes and tokens are stored only as SHA-256 hashes. Dynamic registration is
+rate-limited, size-bounded and globally capped; stale registrations are pruned.
+The consent page cannot be framed and is never cached.
 
 One thing to be clear-eyed about: `/authorize` is a **public HTML form that
 accepts your archive token** — the only deliberately public browser surface here.
 It is rate-limited with exponential lockout and leaks nothing about the archive,
-but it exists, which is why the dashboard stays loopback-only.
+but it exists, which is why the dashboard stays loopback-only. OAuth grants carry
+only `whatmcp:read` and do not receive `sync_archive`; syncing remains available
+locally and to the operator's static token.
 
 ## Tools
 
@@ -346,7 +356,7 @@ but it exists, which is why the dashboard stays loopback-only.
 | `get_chat_summary` | Participants, volume and peak period for one chat |
 | `get_timeline` | Message volume over time, scoped by topic, person or chat |
 | `get_archive_status` | Coverage, embedding completeness, and how far behind WhatsApp it is |
-| `sync_archive` | Catch the archive up to WhatsApp (the only tool that writes) |
+| `sync_archive` | Catch the archive up to WhatsApp (local/static-token only; the only tool that writes) |
 
 ## Security posture
 
@@ -362,8 +372,9 @@ labelled as data, with a random id so quoted text cannot forge an early close.
 That is a mitigation, not a guarantee — which is exactly why read-only matters.
 
 **The archive is as sensitive as your phone.** `~/.whatmcp/` holds nine years of
-messages from everyone who ever wrote to you, in plain SQLite. It is created 0700
-and the config file 0600, but it is not encrypted at rest beyond FileVault.
+messages from everyone who ever wrote to you, in plain SQLite. The directory is
+forced to 0700 and config, archive, OAuth and SQLite sidecar files to 0600, but the
+data is not encrypted at rest beyond FileVault.
 
 ## Layout
 
