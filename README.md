@@ -74,6 +74,9 @@ the full transcript. The reading model does the reasoning.
 
 ## Archive, not cache
 
+<img width="478" height="289" alt="image" src="https://github.com/user-attachments/assets/6c5b23bb-0645-4238-b6f0-65ad76bf27fa" />
+
+
 WhatsApp Desktop prunes its own local store, and unlinking the device can empty it
 outright. After a while this archive holds messages that exist nowhere else on the
 machine, so several properties are deliberate rather than incidental:
