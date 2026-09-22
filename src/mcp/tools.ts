@@ -31,6 +31,7 @@ import {
   getTimeline, getThreadSummary, stats, type SearchContext,
 } from '../search/search.ts';
 import { runIndex } from '../index/indexer.ts';
+import { runWindowsIndex } from '../index/windows-source.ts';
 import { embedMissing } from '../index/embed.ts';
 import { invalidate } from '../store.ts';
 import * as wa from '../whatsapp/source.ts';
@@ -132,6 +133,11 @@ export function buildServer(deps: ToolDeps): McpServer {
    * only — no snapshot, no copy, so it costs microseconds.
    */
   function freshness(): string {
+    if (cfg.sourceType === 'windows-waren6') {
+      const s = stats(ctx());
+      return `Windows data is a snapshot, not a live feed. Latest archived message: ${iso(s.latest)}. ` +
+        'Run sync_archive to acquire recent Windows messages (WAren6 asks before closing WhatsApp).';
+    }
     const src = wa.sourceInfo(cfg.chatstorage);
     if (!src.exists) return 'WhatsApp Desktop store not found on this Mac.';
     const s = stats(ctx());
@@ -481,11 +487,15 @@ export function buildServer(deps: ToolDeps): McpServer {
       {
         title: 'Sync archive',
         description:
-          'Bring the local archive up to date with WhatsApp Desktop: index new ' +
+          (cfg.sourceType === 'windows-waren6'
+            ? 'Acquire and import the encrypted Windows Desktop store with WAren6. ' +
+              'This can take minutes. If WhatsApp is running, a Windows confirmation ' +
+              'dialog asks before closing it; WhatMCP then attempts to reopen it. '
+            : 'Bring the local archive up to date with WhatsApp Desktop: index new ' +
           'messages, then embed anything missing. Read-only with respect to WhatsApp ' +
           'itself — it copies and reads, and never writes or sends. Takes seconds for ' +
           'a routine catch-up. Use when get_archive_status reports the archive is ' +
-          'behind, or when a search for something recent finds nothing.',
+          'behind, or when a search for something recent finds nothing.'),
         inputSchema: {
           full: z.boolean().optional()
             .describe('Re-read the entire WhatsApp store rather than only new messages. ' +
@@ -498,11 +508,13 @@ export function buildServer(deps: ToolDeps): McpServer {
         if (!embedCfg) return text(keyMissing());
 
         const notes: string[] = [];
-        const r = runIndex(cfg.store, {
-          chatstorage: cfg.chatstorage,
-          full,
-          onProgress: (m) => notes.push(m),
-        });
+        const r = cfg.sourceType === 'windows-waren6'
+          ? runWindowsIndex(cfg, { full, progress: m => notes.push(m) })
+          : runIndex(cfg.store, {
+            chatstorage: cfg.chatstorage,
+            full,
+            onProgress: m => notes.push(m),
+          });
 
         const e = await embedMissing(cfg.store, embedCfg, {});
         // The cached handle and its vector matrix are stale by construction now.
@@ -510,12 +522,12 @@ export function buildServer(deps: ToolDeps): McpServer {
 
         const s = stats(ctx());
         return text(
-          `Sync complete (${r.fullPass ? 'full' : 'incremental'} pass).\n` +
-            (r.sourceReset
+          `Sync complete (${full ? 'full' : 'incremental'} pass).\n` +
+            ('sourceReset' in r && r.sourceReset
               ? `\nNOTE: WhatsApp's local store had been rebuilt, so the archive fell back ` +
                 `to a full pass. Nothing previously archived was lost.\n`
               : '') +
-            `  ${r.newMessages} new message(s), ${r.updatedMessages} updated\n` +
+            `  ${'added' in r ? r.added : r.newMessages} new message(s), ${'recovered' in r ? r.recovered : r.updatedMessages} updated\n` +
             `  ${r.windowsBuilt} conversation window(s) built\n` +
             `  ${e.embedded} window(s) embedded` +
             (e.tokens ? ` (${e.tokens.toLocaleString()} tokens, $${e.costUSD.toFixed(4)})` : '') +

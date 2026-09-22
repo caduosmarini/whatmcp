@@ -1,5 +1,9 @@
 # WhatMCP
 
+Windows users with an iPhone-backup archive: see [Windows integration](docs/WINDOWS.md)
+for the WAren6 dependency, incremental import, security limitations, and
+opt-in scheduling.
+
 A local MCP server over a local, durable archive of your WhatsApp history.
 
 ```bash

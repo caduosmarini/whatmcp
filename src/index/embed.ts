@@ -15,7 +15,7 @@ import { openStore, type DB } from '../db/index.ts';
 import { windowHash } from './chunker.ts';
 import {
   embed as apiEmbed, splitBatches, modelTag, estimateTokens,
-  estimateCostUSD, MAX_TOKENS_PER_INPUT, type EmbedConfig,
+  estimateCostUSD, type EmbedConfig,
 } from './openai.ts';
 
 // The archive is written and read on the same machine, but a byte-swapped
@@ -195,7 +195,7 @@ export async function embedMissing(
           const now = Math.floor(Date.now() / 1000);
           for (let j = 0; j < batch.texts.length; j++) {
             const src = slice[offset + j];
-            const isTrunc = estimateTokens(src.text) > MAX_TOKENS_PER_INPUT ? 1 : 0;
+            const isTrunc = batch.texts[j] !== src.text ? 1 : 0;
             truncated += isTrunc;
             ins.run(src.hash, tag, cfg.dimensions, isTrunc, now, packVector(vectors[j]));
           }

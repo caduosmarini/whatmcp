@@ -27,6 +27,7 @@ import express from 'express';
 
 import type { Config } from '../config.ts';
 import { runIndex } from '../index/indexer.ts';
+import { runWindowsIndex } from '../index/windows-source.ts';
 import { embedMissing } from '../index/embed.ts';
 import { invalidate } from '../store.ts';
 import { searchHybrid, listThreads, listPeople, stats, type SearchContext } from '../search/search.ts';
@@ -317,13 +318,15 @@ export function mountDashboard(app: express.Express, deps: DashboardDeps): void 
 
     try {
       emit(full ? 'full re-read of the WhatsApp store…' : 'indexing new messages…');
-      const r = runIndex(cfg.store, {
-        chatstorage: cfg.chatstorage,
-        full,
-        onProgress: emit,
-      });
+      const r = cfg.sourceType === 'windows-waren6'
+        ? runWindowsIndex(cfg, { full, progress: emit })
+        : runIndex(cfg.store, {
+          chatstorage: cfg.chatstorage,
+          full,
+          onProgress: emit,
+        });
       emit(
-        `indexed: ${r.newMessages} new, ${r.updatedMessages} updated, ` +
+        `indexed: ${'added' in r ? r.added : r.newMessages} new, ${'recovered' in r ? r.recovered : r.updatedMessages} updated, ` +
           `${r.windowsBuilt} window(s) built, ${r.windowsDropped} replaced`,
       );
       if (r.sourceReset) {
