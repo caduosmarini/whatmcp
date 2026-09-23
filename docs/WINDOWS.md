@@ -56,7 +56,9 @@ Git and cloud-sync folders; do not share its logs or database.
 **Current limitation:** WAren6 2.0.0 closes a running WhatsApp even in offline
 mode, to release file locks. When WhatsApp is running, WhatMCP shows a Windows
 Yes/No dialog before acquisition. No cancels without closing the app. After
-an accepted run, WhatMCP attempts to reopen it even if extraction or import fails. A
+an accepted run, WhatMCP attempts to reopen it as soon as acquisition is
+complete, while decryption and import continue. It also attempts to reopen
+after an early extraction failure. A
 shared lock suppresses a second sync and dialog while one is awaiting approval
 or extracting; stale locks from crashed processes are recovered. This needs
 an interactive Windows session. Closing WhatsApp yourself before a manual

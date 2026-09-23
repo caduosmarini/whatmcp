@@ -284,7 +284,7 @@ switch (cmd) {
     const cfg = loadConfig();
     const t0 = Date.now();
     if (cfg.sourceType === 'windows-waren6') {
-      const r = runWindowsIndex(cfg, { full: flag('full'), progress: m => console.log('  ' + m) });
+      const r = await runWindowsIndex(cfg, { full: flag('full'), progress: m => console.log('  ' + m) });
       console.log(`Windows: ${r.added} new, ${r.recovered} texts recovered, ${r.windowsBuilt} windows built, ${r.total} archived`);
       break;
     }
@@ -329,7 +329,7 @@ switch (cmd) {
     const t0 = Date.now();
     console.log(bold('indexing'));
     if (cfg.sourceType === 'windows-waren6') {
-      const r = runWindowsIndex(cfg, { full: flag('full'), progress: m => console.log('  ' + m) });
+      const r = await runWindowsIndex(cfg, { full: flag('full'), progress: m => console.log('  ' + m) });
       console.log(`  ${r.added} new, ${r.recovered} texts recovered, ${r.windowsBuilt} windows built (${r.total} archived)`);
     } else {
       const r = runIndex(cfg.store, {

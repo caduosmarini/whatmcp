@@ -509,7 +509,7 @@ export function buildServer(deps: ToolDeps): McpServer {
 
         const notes: string[] = [];
         const r = cfg.sourceType === 'windows-waren6'
-          ? runWindowsIndex(cfg, { full, progress: m => notes.push(m) })
+          ? await runWindowsIndex(cfg, { full, progress: m => notes.push(m) })
           : runIndex(cfg.store, {
             chatstorage: cfg.chatstorage,
             full,

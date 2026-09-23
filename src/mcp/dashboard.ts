@@ -319,7 +319,7 @@ export function mountDashboard(app: express.Express, deps: DashboardDeps): void 
     try {
       emit(full ? 'full re-read of the WhatsApp store…' : 'indexing new messages…');
       const r = cfg.sourceType === 'windows-waren6'
-        ? runWindowsIndex(cfg, { full, progress: emit })
+        ? await runWindowsIndex(cfg, { full, progress: emit })
         : runIndex(cfg.store, {
           chatstorage: cfg.chatstorage,
           full,
@@ -329,7 +329,7 @@ export function mountDashboard(app: express.Express, deps: DashboardDeps): void 
         `indexed: ${'added' in r ? r.added : r.newMessages} new, ${'recovered' in r ? r.recovered : r.updatedMessages} updated, ` +
           `${r.windowsBuilt} window(s) built, ${r.windowsDropped} replaced`,
       );
-      if (r.sourceReset) {
+      if ('sourceReset' in r && r.sourceReset) {
         emit("note: WhatsApp's local store had been rebuilt; fell back to a full pass. Nothing archived was lost.");
       }
 
