@@ -25,6 +25,7 @@ import { runPreflight } from './preflight.ts';
 import { dirname, join } from 'node:path';
 import { readSecret } from './secret-input.ts';
 import { runSyncProcess, syncWorkerCommand } from './sync-process.ts';
+import { tryAcquireSyncLock } from './sync-lock.ts';
 
 const argv = process.argv.slice(2);
 const [cmd, ...rest] = argv;
@@ -286,35 +287,45 @@ switch (cmd) {
 
   case 'sync': {
     const [command, args] = syncWorkerCommand(flag('full'));
-    process.exitCode = await runSyncProcess(command, args);
+    process.exitCode = await runSyncProcess(command, args, { scheduled: flag('scheduled') });
     break;
   }
 
   case 'sync-worker': {
-    const cfg = loadConfig();
-    // Fail before touching WhatsApp if the key is missing: a sync that indexes
-    // but cannot embed leaves the archive in a half-updated state that looks fine
-    // until someone runs a semantic query.
-    const ec = embedConfig(cfg);
-    const t0 = Date.now();
-    console.log(bold('indexing'));
-    const r = runIndex(cfg.store, {
-      chatstorage: cfg.chatstorage,
-      full: flag('full'),
-      onProgress: (m) => console.log(`  ${m}`),
-    });
-    console.log(
-      `  ${r.newMessages} new, ${r.updatedMessages} updated, ` +
-        `${r.windowsBuilt} window(s) built  (${r.totalMessages} archived)`,
-    );
-    console.log(bold('embedding'));
-    await embedMissing(cfg.store, ec, { onProgress });
-    const db = openStore(cfg.store);
-    const cov = vectorCoverage(db, ec);
-    db.close();
-    console.log(`  coverage: ${cov.embedded}/${cov.windows} (${cov.pct}%)`);
-    await calibrateIfUnset(cfg, cov.embedded);
-    console.log(`done in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+    const release = tryAcquireSyncLock();
+    if (!release) {
+      console.error('another sync is already running; this request was skipped');
+      process.exitCode = 75;
+      break;
+    }
+    try {
+      const cfg = loadConfig();
+      // Fail before touching WhatsApp if the key is missing: a sync that indexes
+      // but cannot embed leaves the archive in a half-updated state that looks fine
+      // until someone runs a semantic query.
+      const ec = embedConfig(cfg);
+      const t0 = Date.now();
+      console.log(bold('indexing'));
+      const r = runIndex(cfg.store, {
+        chatstorage: cfg.chatstorage,
+        full: flag('full'),
+        onProgress: (m) => console.log(`  ${m}`),
+      });
+      console.log(
+        `  ${r.newMessages} new, ${r.updatedMessages} updated, ` +
+          `${r.windowsBuilt} window(s) built  (${r.totalMessages} archived)`,
+      );
+      console.log(bold('embedding'));
+      await embedMissing(cfg.store, ec, { onProgress });
+      const db = openStore(cfg.store);
+      const cov = vectorCoverage(db, ec);
+      db.close();
+      console.log(`  coverage: ${cov.embedded}/${cov.windows} (${cov.pct}%)`);
+      await calibrateIfUnset(cfg, cov.embedded);
+      console.log(`done in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+    } finally {
+      release();
+    }
     break;
   }
 

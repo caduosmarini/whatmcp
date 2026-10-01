@@ -180,8 +180,11 @@ embedded.
 
 Scheduled, manual, MCP, and dashboard syncs run in a supervised child process.
 The supervisor stops a sync after 5 minutes (SIGTERM, then SIGKILL after 5 more
-seconds) and logs the timeout. A timed-out run can be retried at the next
-interval; previously archived messages remain in the archive.
+seconds) and logs the timeout. Only one sync can run at a time; overlapping
+requests are skipped immediately. After a timeout, scheduled attempts are paused
+instead of repeatedly waiting on a macOS permission prompt. Run `npm run sync`
+when you can respond to that prompt; a successful manual sync resumes the
+schedule. Previously archived messages remain in the archive.
 
 ```bash
 npm run wa -- sync-every 12    # change the cadence

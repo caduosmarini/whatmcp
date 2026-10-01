@@ -1,9 +1,34 @@
 import { spawn } from 'node:child_process';
 import { constants } from 'node:os';
-import { join } from 'node:path';
+import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { DATA_DIR } from './config.ts';
 
 export const SYNC_TIMEOUT_MS = 5 * 60 * 1000;
 const STOP_GRACE_MS = 5 * 1000;
+export const SYNC_PAUSE_PATH = join(DATA_DIR, 'sync-paused.json');
+
+export interface SyncProcessOptions {
+  timeoutMs?: number;
+  graceMs?: number;
+  onOutput?: (chunk: string) => void;
+  /** Scheduled runs never start while an earlier timeout needs attention. */
+  scheduled?: boolean;
+  /** Override only for isolated tests. */
+  pausePath?: string;
+}
+
+export function isScheduledSyncPaused(path = SYNC_PAUSE_PATH): boolean {
+  return existsSync(path);
+}
+
+function pauseScheduledSync(path: string): void {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  writeFileSync(path,
+    JSON.stringify({ pausedAt: new Date().toISOString(), reason: 'sync timeout' }) + '\n',
+    { mode: 0o600 });
+  chmodSync(path, 0o600);
+}
 
 export function syncWorkerCommand(full = false): [string, string[]] {
   return [process.execPath, [
@@ -14,14 +39,18 @@ export function syncWorkerCommand(full = false): [string, string[]] {
 }
 
 /** Run sync in a child so a blocked synchronous SQLite copy cannot block its watchdog. */
-export function runSyncProcess(
+export async function runSyncProcess(
   command: string,
   args: string[],
-  timeoutMs = SYNC_TIMEOUT_MS,
-  graceMs = STOP_GRACE_MS,
-  onOutput?: (chunk: string) => void,
+  options: SyncProcessOptions = {},
 ): Promise<number> {
-  return new Promise((resolve, reject) => {
+  const { timeoutMs = SYNC_TIMEOUT_MS, graceMs = STOP_GRACE_MS,
+    onOutput, scheduled = false, pausePath = SYNC_PAUSE_PATH } = options;
+  if (scheduled && isScheduledSyncPaused(pausePath)) {
+    console.error('scheduled sync paused after a timeout; run `npm run sync` manually to retry');
+    return 76;
+  }
+  const result = await new Promise<number>((resolve, reject) => {
     const child = spawn(command, args, {
       stdio: onOutput ? ['ignore', 'pipe', 'pipe'] : 'inherit',
     });
@@ -48,6 +77,14 @@ export function runSyncProcess(
     const timeout = setTimeout(() => {
       timedOut = true;
       console.error(`sync exceeded ${timeoutMs / 1000} seconds; stopping it`);
+      // Record the pause while this child still owns the sync lock. A later
+      // successful manual run can then clear it without racing this timeout.
+      try {
+        pauseScheduledSync(pausePath);
+        console.error('future scheduled syncs are paused until a manual sync succeeds');
+      } catch (error) {
+        console.error(`could not record scheduled sync pause: ${String(error)}`);
+      }
       stop('SIGTERM');
     }, timeoutMs);
     const cleanup = () => {
@@ -64,4 +101,8 @@ export function runSyncProcess(
         : code ?? (signal ? 128 + (constants.signals[signal] ?? 1) : 1));
     });
   });
+  if (result === 0) {
+    rmSync(pausePath, { force: true });
+  }
+  return result;
 }

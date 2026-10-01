@@ -31,7 +31,7 @@ import {
   getTimeline, getThreadSummary, stats, type SearchContext,
 } from '../search/search.ts';
 import { invalidate } from '../store.ts';
-import { runSyncProcess, syncWorkerCommand } from '../sync-process.ts';
+import { isScheduledSyncPaused, runSyncProcess, syncWorkerCommand } from '../sync-process.ts';
 import * as wa from '../whatsapp/source.ts';
 import { emit, summarizeArgs, summarizeResult } from './events.ts';
 
@@ -555,6 +555,9 @@ export function buildServer(deps: ToolDeps): McpServer {
           `  range:     ${iso(s.earliest)} to ${iso(s.latest)}\n` +
           `  last sync: ${s.last_sync_at ? iso(s.last_sync_at) : 'never'}\n\n` +
           freshness() +
+          (isScheduledSyncPaused()
+            ? '\n\nScheduled sync is paused after a timeout. Run sync_archive manually to retry; a successful sync resumes the schedule.'
+            : '') +
           (pct < 100
             ? `\n\n${s.windows - s.embedded} window(s) have no vector, so semantic ` +
               `search cannot see them. Run sync_archive to finish embedding.`
@@ -587,13 +590,16 @@ export function buildServer(deps: ToolDeps): McpServer {
 
         const [command, args] = syncWorkerCommand(full);
         let output = '';
-        const code = await runSyncProcess(command, args, undefined, undefined,
-          (chunk) => { output = (output + chunk).slice(-8000); });
+        const code = await runSyncProcess(command, args, {
+          onOutput: (chunk) => { output = (output + chunk).slice(-8000); },
+        });
         // The child may have written some messages even when embedding failed.
         invalidate();
         if (code !== 0) {
           throw new Error(code === 124
-            ? 'Sync exceeded 5 minutes and was stopped.'
+            ? 'Sync exceeded 5 minutes and was stopped. Scheduled sync is paused until a manual sync succeeds.'
+            : code === 75
+              ? 'Another sync is already running; this request was skipped.'
             : `Sync failed (exit ${code}): ${output.trim()}`);
         }
         const s = stats(ctx());

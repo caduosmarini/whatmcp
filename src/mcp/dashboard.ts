@@ -27,7 +27,7 @@ import express from 'express';
 
 import type { Config } from '../config.ts';
 import { invalidate } from '../store.ts';
-import { runSyncProcess, syncWorkerCommand } from '../sync-process.ts';
+import { isScheduledSyncPaused, runSyncProcess, syncWorkerCommand } from '../sync-process.ts';
 import { searchHybrid, listThreads, listPeople, stats, type SearchContext } from '../search/search.ts';
 import * as wa from '../whatsapp/source.ts';
 import { recent, subscribe, emit } from './events.ts';
@@ -213,6 +213,11 @@ export function mountDashboard(app: express.Express, deps: DashboardDeps): void 
       detail = `Last synced ${new Date(s.last_sync_at * 1000).toLocaleString()}.`;
     }
 
+    if (isScheduledSyncPaused()) {
+      state = 'behind';
+      detail += ' Scheduled sync is paused after a timeout; run a manual sync to retry.';
+    }
+
     res.json({
       ok: true,
       store: cfg.store,
@@ -316,11 +321,14 @@ export function mountDashboard(app: express.Express, deps: DashboardDeps): void 
 
     try {
       const [command, args] = syncWorkerCommand(full);
-      const code = await runSyncProcess(command, args, undefined, undefined,
-        (chunk) => emit(chunk.trimEnd()));
+      const code = await runSyncProcess(command, args, {
+        onOutput: (chunk) => emit(chunk.trimEnd()),
+      });
       invalidate(); // a failed child may still have indexed some messages
       if (code !== 0) throw new Error(code === 124
-        ? 'sync exceeded 5 minutes and was stopped'
+        ? 'sync exceeded 5 minutes; scheduled sync is paused until a manual sync succeeds'
+        : code === 75
+          ? 'another sync is already running; this request was skipped'
         : `sync exited with code ${code}`);
 
       const s = stats(ctx());
