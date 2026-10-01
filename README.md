@@ -178,6 +178,11 @@ the archive keeps growing whether or not an AI client is running. Routine syncs
 cost fractions of a cent; a quiet interval costs nothing, since nothing new gets
 embedded.
 
+Scheduled, manual, MCP, and dashboard syncs run in a supervised child process.
+The supervisor stops a sync after 5 minutes (SIGTERM, then SIGKILL after 5 more
+seconds) and logs the timeout. A timed-out run can be retried at the next
+interval; previously archived messages remain in the archive.
+
 ```bash
 npm run wa -- sync-every 12    # change the cadence
 npm run wa -- sync-every 0     # back to manual

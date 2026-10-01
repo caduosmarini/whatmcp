@@ -30,9 +30,8 @@ import {
   searchHybrid, getConversation, listMessageFeed, listThreads, listPeople,
   getTimeline, getThreadSummary, stats, type SearchContext,
 } from '../search/search.ts';
-import { runIndex } from '../index/indexer.ts';
-import { embedMissing } from '../index/embed.ts';
 import { invalidate } from '../store.ts';
+import { runSyncProcess, syncWorkerCommand } from '../sync-process.ts';
 import * as wa from '../whatsapp/source.ts';
 import { emit, summarizeArgs, summarizeResult } from './events.ts';
 
@@ -586,30 +585,22 @@ export function buildServer(deps: ToolDeps): McpServer {
       async ({ full }) => {
         if (!embedCfg) return text(keyMissing());
 
-        const notes: string[] = [];
-        const r = runIndex(cfg.store, {
-          chatstorage: cfg.chatstorage,
-          full,
-          onProgress: (m) => notes.push(m),
-        });
-
-        const e = await embedMissing(cfg.store, embedCfg, {});
-        // The cached handle and its vector matrix are stale by construction now.
+        const [command, args] = syncWorkerCommand(full);
+        let output = '';
+        const code = await runSyncProcess(command, args, undefined, undefined,
+          (chunk) => { output = (output + chunk).slice(-8000); });
+        // The child may have written some messages even when embedding failed.
         invalidate();
-
+        if (code !== 0) {
+          throw new Error(code === 124
+            ? 'Sync exceeded 5 minutes and was stopped.'
+            : `Sync failed (exit ${code}): ${output.trim()}`);
+        }
         const s = stats(ctx());
         return text(
-          `Sync complete (${r.fullPass ? 'full' : 'incremental'} pass).\n` +
-            (r.sourceReset
-              ? `\nNOTE: WhatsApp's local store had been rebuilt, so the archive fell back ` +
-                `to a full pass. Nothing previously archived was lost.\n`
-              : '') +
-            `  ${r.newMessages} new message(s), ${r.updatedMessages} updated\n` +
-            `  ${r.windowsBuilt} conversation window(s) built\n` +
-            `  ${e.embedded} window(s) embedded` +
-            (e.tokens ? ` (${e.tokens.toLocaleString()} tokens, $${e.costUSD.toFixed(4)})` : '') +
-            `\n  archive now holds ${s.messages} message(s) across ${s.threads} chat(s)` +
-            (notes.length ? `\n\n${notes.join('\n')}` : ''),
+          `Sync complete (${full ? 'full' : 'incremental'} pass).\n` +
+            `${output.trim()}\n` +
+            `archive now holds ${s.messages} message(s) across ${s.threads} chat(s)`,
         );
       },
     );

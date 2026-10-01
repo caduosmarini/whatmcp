@@ -26,9 +26,8 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import express from 'express';
 
 import type { Config } from '../config.ts';
-import { runIndex } from '../index/indexer.ts';
-import { embedMissing } from '../index/embed.ts';
 import { invalidate } from '../store.ts';
+import { runSyncProcess, syncWorkerCommand } from '../sync-process.ts';
 import { searchHybrid, listThreads, listPeople, stats, type SearchContext } from '../search/search.ts';
 import * as wa from '../whatsapp/source.ts';
 import { recent, subscribe, emit } from './events.ts';
@@ -316,44 +315,16 @@ export function mountDashboard(app: express.Express, deps: DashboardDeps): void 
     const emit = (msg: string) => res.write(JSON.stringify({ msg }) + '\n');
 
     try {
-      emit(full ? 'full re-read of the WhatsApp store…' : 'indexing new messages…');
-      const r = runIndex(cfg.store, {
-        chatstorage: cfg.chatstorage,
-        full,
-        onProgress: emit,
-      });
-      emit(
-        `indexed: ${r.newMessages} new, ${r.updatedMessages} updated, ` +
-          `${r.windowsBuilt} window(s) built, ${r.windowsDropped} replaced`,
-      );
-      if (r.sourceReset) {
-        emit("note: WhatsApp's local store had been rebuilt; fell back to a full pass. Nothing archived was lost.");
-      }
+      const [command, args] = syncWorkerCommand(full);
+      const code = await runSyncProcess(command, args, undefined, undefined,
+        (chunk) => emit(chunk.trimEnd()));
+      invalidate(); // a failed child may still have indexed some messages
+      if (code !== 0) throw new Error(code === 124
+        ? 'sync exceeded 5 minutes and was stopped'
+        : `sync exited with code ${code}`);
 
-      emit('embedding…');
-      const e = await embedMissing(cfg.store, embedCfg, {
-        onProgress: (ev) => {
-          if (ev.phase === 'start') {
-            emit(
-              ev.pending === 0
-                ? 'all windows already embedded'
-                : `${ev.pending} window(s) to embed, ~${ev.estTokens.toLocaleString()} tokens ` +
-                  `(est. $${ev.estCostUSD.toFixed(4)})`,
-            );
-          } else if (ev.phase === 'progress') {
-            emit(`  ${ev.done}/${ev.pending}  ${ev.rate}/s`);
-          } else if (ev.phase === 'done' && ev.embedded > 0) {
-            emit(
-              `embedded ${ev.embedded} in ${(ev.elapsedMs / 1000).toFixed(1)}s ` +
-                `($${ev.costUSD.toFixed(4)})`,
-            );
-          }
-        },
-      });
-
-      invalidate(); // the cached vector matrix is stale by construction now
       const s = stats(ctx());
-      emit(`done — ${s.messages} message(s) across ${s.threads} chat(s), ${e.embedded} newly embedded`);
+      emit(`done — ${s.messages} message(s) across ${s.threads} chat(s)`);
     } catch (err) {
       emit(`failed: ${(err as Error).message}`);
     } finally {

@@ -24,6 +24,7 @@ import { runSetup, installSyncAgent } from './setup.ts';
 import { runPreflight } from './preflight.ts';
 import { dirname, join } from 'node:path';
 import { readSecret } from './secret-input.ts';
+import { runSyncProcess, syncWorkerCommand } from './sync-process.ts';
 
 const argv = process.argv.slice(2);
 const [cmd, ...rest] = argv;
@@ -284,6 +285,12 @@ switch (cmd) {
   }
 
   case 'sync': {
+    const [command, args] = syncWorkerCommand(flag('full'));
+    process.exitCode = await runSyncProcess(command, args);
+    break;
+  }
+
+  case 'sync-worker': {
     const cfg = loadConfig();
     // Fail before touching WhatsApp if the key is missing: a sync that indexes
     // but cannot embed leaves the archive in a half-updated state that looks fine
