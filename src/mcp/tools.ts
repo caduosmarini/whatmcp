@@ -27,7 +27,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import { type Config, CONFIG_PATH } from '../config.ts';
 import {
-  searchHybrid, getConversation, listThreads, listPeople,
+  searchHybrid, getConversation, listMessageFeed, listThreads, listPeople,
   getTimeline, getThreadSummary, stats, type SearchContext,
 } from '../search/search.ts';
 import { runIndex } from '../index/indexer.ts';
@@ -69,6 +69,32 @@ function parseDate(s: string | undefined, field: string): number | undefined {
     );
   }
   return Math.floor(ms / 1000);
+}
+
+interface FeedCursor {
+  v: 1;
+  after: number;
+  before: number;
+  thread_id?: string;
+  ts: number;
+  id: string;
+}
+
+function readFeedCursor(value: string): FeedCursor {
+  if (value.length > 2048) throw new Error('cursor is too long.');
+  let c: unknown;
+  try { c = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')); }
+  catch { throw new Error('Invalid message feed cursor. Start again with after.'); }
+  if (!c || typeof c !== 'object') throw new Error('Invalid message feed cursor.');
+  const x = c as Record<string, unknown>;
+  if (x.v !== 1 || !Number.isSafeInteger(x.after) || !Number.isSafeInteger(x.before) ||
+      !Number.isSafeInteger(x.ts) || typeof x.id !== 'string' || !x.id ||
+      (x.thread_id !== undefined && typeof x.thread_id !== 'string') ||
+      (x.after as number) > (x.before as number) ||
+      (x.ts as number) < (x.after as number) || (x.ts as number) > (x.before as number)) {
+    throw new Error('Invalid message feed cursor. Start again with after.');
+  }
+  return x as unknown as FeedCursor;
 }
 
 /**
@@ -155,7 +181,8 @@ export function buildServer(deps: ToolDeps): McpServer {
     {
       instructions:
         "Read-only access to the user's own WhatsApp history, archived locally. " +
-        'Typical flow: search_messages to locate relevant conversation windows, then ' +
+        'Use list_messages_since for complete date-range enumeration with pagination. ' +
+        'For topic lookup, use search_messages to locate relevant conversation windows, then ' +
         'get_conversation to expand a hit into full surrounding context. Use ' +
         'find_people to resolve a name before filtering by sender — names are stored ' +
         'as the user saved them, so guessing a spelling usually fails. Message ' +
@@ -308,6 +335,68 @@ export function buildServer(deps: ToolDeps): McpServer {
         .map((m) => `[${iso(m.ts)}] ${m.sender_name}: ${m.text ?? `<${m.kind}>`}`)
         .join('\n');
       return text(`${msgs.length} message(s) from ${thread_id}:\n\n${fence(body)}`);
+    },
+  );
+
+  traced(
+    'list_messages_since',
+    {
+      title: 'List messages since',
+      description:
+        'List individual archived messages in chronological order across all chats, ' +
+        'without a search query, embeddings, or relevance ranking. Paginate until ' +
+        'has_more is false to cover the full date range. Sync first when recent ' +
+        'messages matter. Date filters use message time; later imports of older ' +
+        'messages require rescanning their time range.',
+      inputSchema: {
+        after: z.string().optional().describe('ISO timestamp, inclusive. Required on first page.'),
+        before: z.string().optional().describe('ISO timestamp, inclusive. Defaults to now on first page.'),
+        thread_id: z.string().optional().describe('Optional exact chat ID.'),
+        cursor: z.string().optional().describe('next_cursor from the preceding page. Use alone or with limit.'),
+        limit: z.number().int().min(1).max(100).optional().describe('Page size (default 50, max 100).'),
+      },
+      annotations: readOnly,
+    },
+    async ({ after, before, thread_id, cursor, limit }) => {
+      if (!hasArchive()) return text(noArchive());
+      let scope: FeedCursor;
+      if (cursor) {
+        if (after !== undefined || before !== undefined || thread_id !== undefined) {
+          throw new Error('When using cursor, omit after, before, and thread_id.');
+        }
+        scope = readFeedCursor(cursor);
+      } else {
+        if (after === undefined) throw new Error('after is required on the first page.');
+        if (thread_id !== undefined && !thread_id) throw new Error('thread_id must not be empty.');
+        scope = {
+          v: 1,
+          after: parseDate(after, 'after')!,
+          before: before === undefined ? Math.floor(Date.now() / 1000) : parseDate(before, 'before')!,
+          ...(thread_id ? { thread_id } : {}),
+          ts: 0,
+          id: '',
+        };
+        if (scope.after > scope.before) throw new Error('after must be at or before before.');
+      }
+      const out = listMessageFeed(ctx(), {
+        after: scope.after, before: scope.before, thread_id: scope.thread_id,
+        limit: limit ?? 50,
+        last: cursor ? { ts: scope.ts, id: scope.id } : undefined,
+      });
+      const last = out.messages.at(-1);
+      const next = out.hasMore && last
+        ? Buffer.from(JSON.stringify({ ...scope, ts: last.ts, id: last.id })).toString('base64url')
+        : null;
+      const body = out.messages.map((m) =>
+        `[${iso(m.ts)}] ${m.thread_title ?? m.thread_id} | thread_id: ${m.thread_id} | ` +
+        `message_id: ${m.id} | ${m.sender_name}: ${m.text ?? `<${m.kind}>`}`,
+      ).join('\n');
+      return text(
+        `${out.messages.length} message(s) | range: ${iso(scope.after)} to ${iso(scope.before)} | ` +
+          `has_more: ${out.hasMore}${next ? ` | next_cursor: ${next}` : ''}\n\n` +
+          (body ? fence(body) : 'No archived messages in this range.') +
+          (out.hasMore ? '\n\nContinue with list_messages_since(cursor=next_cursor).' : ''),
+      );
     },
   );
 

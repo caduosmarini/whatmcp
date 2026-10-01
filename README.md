@@ -379,12 +379,34 @@ locally and to the operator's static token.
 |---|---|
 | `search_messages` | Hybrid semantic + keyword search over windows; filter by chat, sender, date |
 | `get_conversation` | Expand a thread, optionally centred on a timestamp |
+| `list_messages_since` | Enumerate individual messages by date across chats, with a resumable page cursor |
 | `list_chats` | Chats by recency, with counts and date ranges |
 | `find_people` | Resolve a name or phone number to who they are and where they talk |
 | `get_chat_summary` | Participants, volume and peak period for one chat |
 | `get_timeline` | Message volume over time, scoped by topic, person or chat |
 | `get_archive_status` | Coverage, embedding completeness, and how far behind WhatsApp it is |
 | `sync_archive` | Catch the archive up to WhatsApp (local/static-token only; the only tool that writes) |
+
+### Enumerating messages for a recurring review
+
+Call `sync_archive` when available, then call `list_messages_since` with an ISO
+`after` timestamp (and optionally `before` and an exact `thread_id`). The tool
+returns messages in `(timestamp, message ID)` order, including media placeholders,
+and needs no API key or search term. If `has_more` is true, call it again with
+`next_cursor`; keep paging until `has_more` is false. The cursor retains the
+original time range and chat filter. For example, start with
+`after="2026-10-01T00:00:00-03:00"`; on later pages pass only `cursor` and,
+optionally, `limit`.
+After upgrading an existing checkout to this version, run `npm run index` once
+to create the feed indexes before starting the MCP server.
+
+For a scheduled review, save a checkpoint only after processing the final page.
+Keep message IDs to deduplicate across runs, and read later replies before
+calling something unresolved. The date range uses **message time**, so a later
+import of older history or an edit to an existing message will not appear in a
+completed interval. Rescan relevant older intervals when importing history or
+after a full reindex. Archive freshness is reported by `get_archive_status`;
+no message feed can include messages that have not yet been synced.
 
 ## Security posture
 
