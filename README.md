@@ -2,6 +2,8 @@
 
 A local MCP server over a local, durable archive of your WhatsApp history.
 
+See the [changelog](CHANGELOG.md) for changes in this fork.
+
 Requires **Node.js >= 22.6**. Install the project, then choose a source:
 
 ```sh
