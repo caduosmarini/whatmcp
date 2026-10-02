@@ -325,7 +325,7 @@ switch (cmd) {
   }
 
   case 'sync': {
-    const [command, args] = syncWorkerCommand(flag('full'), flag('index-only'));
+    const [command, args] = syncWorkerCommand(flag('full'));
     process.exitCode = await runSyncProcess(command, args, { scheduled: flag('scheduled'), timeoutMs: syncTimeoutMs(loadConfig().sourceType) });
     break;
   }
@@ -342,7 +342,7 @@ switch (cmd) {
       // Fail before touching WhatsApp if the key is missing: a sync that indexes
       // but cannot embed leaves the archive in a half-updated state that looks fine
       // until someone runs a semantic query.
-      const ec = flag('index-only') ? null : embedConfig(cfg);
+      const ec = embedConfig(cfg);
       const t0 = Date.now();
       console.log(bold('indexing'));
       if (cfg.sourceType === 'windows-waren6') {
@@ -361,7 +361,8 @@ switch (cmd) {
       }
       if (ec) {
         console.log(bold('embedding'));
-        await embedMissing(cfg.store, ec, { onProgress });
+        const result = await embedMissing(cfg.store, ec, { onProgress });
+        if (result.failed > 0) throw new Error(`${result.failed} embedding window(s) remain pending after API rejection; retry sync.`);
         const db = openStore(cfg.store);
         const cov = vectorCoverage(db, ec);
         db.close();

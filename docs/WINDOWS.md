@@ -79,7 +79,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/register-hotcopy
 The `WhatMCP Hot Copy` task uses an invisible launcher under the interactive
 user's profile. The user must be signed in. Configure `data/runtime-windows.json`
 with `python_path` when Python is unavailable on that user's PATH. The task
-collects, validates and imports; it does not add embedding API calls.
+collects, validates and imports, then generates all pending embeddings.
 
 Alternatively, `npm run wa -- sync-every <hours>` creates the per-user
 `WhatMCP Sync` task, which also embeds missing windows. `sync-every 0` removes
@@ -94,9 +94,9 @@ Windows sync uses the upstream supervised worker and SQLite process lock, with a
 pauses scheduled attempts until a successful manual retry. On Windows the worker
 and its helper processes are terminated together; WhatsApp remains open.
 
-The hidden scheduled launcher runs `sync --scheduled --index-only`: collection,
-validation and import remain automatic, without adding embedding API calls to the
-existing schedule. A manual `sync --index-only` can retry collection after a
-timeout; `sync` also completes embeddings. Configure `windows_source_path` when
+The hidden scheduled launcher runs `sync --scheduled`: collection, validation,
+import and pending embeddings run on every synchronization. Manual CLI, MCP and
+dashboard sync also generate pending embeddings. Existing vectors are reused;
+only missing vectors require embedding API calls. Configure `windows_source_path` when
 a service account must refer to another user's live WhatsApp package directory.
 The account must have access to the source and any required user credentials.

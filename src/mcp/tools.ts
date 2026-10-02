@@ -578,7 +578,8 @@ export function buildServer(deps: ToolDeps): McpServer {
         title: 'Sync archive',
         description:
           (cfg.sourceType === 'windows-waren6'
-            ? 'Acquire and import the encrypted Windows Desktop store with WAren6. ' +
+            ? 'Acquire and import the encrypted Windows Desktop store with WAren6, then ' +
+              'generate embeddings for every pending conversation window. ' +
               'This can take minutes. Uses the same validated hot-copy pipeline as the ' +
               'scheduled sync, while WhatsApp remains open; no close confirmation is needed. '
             : 'Bring the local archive up to date with WhatsApp Desktop: index new ' +

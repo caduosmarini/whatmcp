@@ -37,10 +37,10 @@ test('sync watchdog preserves successful exit', async () => {
   assert.equal(output, 'ready\n');
 });
 
- test('Windows timeout and collection-only worker preserve platform policy', () => {
+ test('Windows timeout and sync worker preserve platform policy', () => {
    assert.equal(syncTimeoutMs('windows-waren6'), 30 * 60000);
    assert.equal(syncTimeoutMs('chatstorage'), 5 * 60000);
-   assert.ok(syncWorkerCommand(false, true)[1].includes('--index-only'));
+   assert.ok(!syncWorkerCommand(false)[1].includes('--index-only'));
  });
 
 test('Windows watchdog terminates descendants of its worker', { skip: process.platform !== 'win32' }, async t => {
