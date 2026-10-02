@@ -100,3 +100,14 @@ dashboard sync also generate pending embeddings. Existing vectors are reused;
 only missing vectors require embedding API calls. Configure `windows_source_path` when
 a service account must refer to another user's live WhatsApp package directory.
 The account must have access to the source and any required user credentials.
+
+## MCP client timeout
+
+Windows collection can take several minutes. Configure the MCP client's tool
+call timeout above the server's 30-minute watchdog, rather than abandoning the
+request while extraction is still running. In an existing Codex
+`[mcp_servers.whatmcp]` entry, set `tool_timeout_sec = 1900` and reload the MCP
+connection to apply it. Remote clients need their own timeout configuration.
+The source service and scheduled task are independent of that client setting.
+Read tools query the existing archive without triggering collection; request
+`sync_archive` only for an explicit refresh or when newer data is necessary.
