@@ -30,6 +30,7 @@
     <string>--no-warnings</string>
     <string>__REPO__/src/cli.ts</string>
     <string>sync</string>
+    <string>--scheduled</string>
   </array>
 
   <key>WorkingDirectory</key>

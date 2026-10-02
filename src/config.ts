@@ -41,6 +41,8 @@ export interface FileConfig {
   windows_waren6_path?: string;
   /** Private directory for WAren6 cases; not inside the Git checkout. */
   windows_output_dir?: string;
+  /** Explicit live package directory for service accounts. */
+  windows_source_path?: string;
   /** Background sync cadence in hours; 0 or absent means manual only. */
   sync_interval_hours?: number;
   /** Written by `wa calibrate`; see search.ts for why these are not constants. */
@@ -103,6 +105,7 @@ export interface Config {
   sourceType: 'chatstorage' | 'windows-waren6';
   windowsWaren6Path: string | null;
   windowsOutputDir: string;
+  windowsSourcePath?: string;
   openaiKey: string | null;
   openaiModel: string;
   openaiDims: number;
@@ -130,6 +133,7 @@ export function loadConfig(): Config {
     sourceType: process.env.WHATMCP_SOURCE_TYPE === 'windows-waren6' ? 'windows-waren6'
       : process.env.WHATMCP_SOURCE_TYPE === 'chatstorage' ? 'chatstorage'
       : f.source_type ?? 'chatstorage',
+    windowsSourcePath: process.env.WHATMCP_WINDOWS_SOURCE_PATH ?? f.windows_source_path,
     windowsWaren6Path: process.env.WHATMCP_WAREN6_PATH ?? f.windows_waren6_path ?? null,
     windowsOutputDir: process.env.WHATMCP_WINDOWS_OUTPUT_DIR ?? f.windows_output_dir ?? join(DATA_DIR, 'windows-cases'),
     openaiKey: process.env.OPENAI_API_KEY ?? f.openai_api_key ?? null,

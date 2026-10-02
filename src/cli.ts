@@ -26,6 +26,8 @@ import { runSetup, installSyncAgent, disableSyncAgent } from './setup.ts';
 import { runPreflight } from './preflight.ts';
 import { dirname, join, resolve } from 'node:path';
 import { readSecret } from './secret-input.ts';
+import { runSyncProcess, syncWorkerCommand, syncTimeoutMs } from './sync-process.ts';
+import { tryAcquireSyncLock } from './sync-lock.ts';
 
 const argv = process.argv.slice(2);
 const [cmd, ...rest] = argv;
@@ -57,12 +59,13 @@ function onProgress(e: ProgressEvent) {
     process.stdout.write(`\r  ${e.done}/${e.pending}  ${e.rate}/s${eta}      `);
   } else if (e.phase === 'warn') {
     console.log(`\n  warn: ${e.code} ${e.detail}`);
-  } else if (e.phase === 'done' && e.embedded > 0) {
+  } else if (e.phase === 'done' && (e.embedded > 0 || e.failed > 0)) {
     process.stdout.write('\r');
     console.log(
       `  embedded ${e.embedded} in ${(e.elapsedMs / 1000).toFixed(1)}s, ` +
         `${e.tokens.toLocaleString()} tokens, $${e.costUSD.toFixed(4)}` +
-        (e.truncated ? `  (${e.truncated} truncated)` : ''),
+        (e.truncated ? `  (${e.truncated} truncated)` : '') +
+        (e.failed ? `\n  ${e.failed} oversized window(s) left pending for a future run.` : ''),
     );
   }
 }
@@ -322,35 +325,53 @@ switch (cmd) {
   }
 
   case 'sync': {
-    const cfg = loadConfig();
-    // Fail before touching WhatsApp if the key is missing: a sync that indexes
-    // but cannot embed leaves the archive in a half-updated state that looks fine
-    // until someone runs a semantic query.
-    const ec = embedConfig(cfg);
-    const t0 = Date.now();
-    console.log(bold('indexing'));
-    if (cfg.sourceType === 'windows-waren6') {
-      const r = await runWindowsIndex(cfg, { full: flag('full'), progress: m => console.log('  ' + m) });
-      console.log(`  ${r.added} new, ${r.recovered} texts recovered, ${r.windowsBuilt} windows built (${r.total} archived)`);
-    } else {
-      const r = runIndex(cfg.store, {
-        chatstorage: cfg.chatstorage,
-        full: flag('full'),
-        onProgress: (m) => console.log(`  ${m}`),
-      });
-      console.log(
-        `  ${r.newMessages} new, ${r.updatedMessages} updated, ` +
-          `${r.windowsBuilt} window(s) built  (${r.totalMessages} archived)`,
-      );
+    const [command, args] = syncWorkerCommand(flag('full'), flag('index-only'));
+    process.exitCode = await runSyncProcess(command, args, { scheduled: flag('scheduled'), timeoutMs: syncTimeoutMs(loadConfig().sourceType) });
+    break;
+  }
+
+  case 'sync-worker': {
+    const release = tryAcquireSyncLock();
+    if (!release) {
+      console.error('another sync is already running; this request was skipped');
+      process.exitCode = 75;
+      break;
     }
-    console.log(bold('embedding'));
-    await embedMissing(cfg.store, ec, { onProgress });
-    const db = openStore(cfg.store);
-    const cov = vectorCoverage(db, ec);
-    db.close();
-    console.log(`  coverage: ${cov.embedded}/${cov.windows} (${cov.pct}%)`);
-    await calibrateIfUnset(cfg, cov.embedded);
-    console.log(`done in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+    try {
+      const cfg = loadConfig();
+      // Fail before touching WhatsApp if the key is missing: a sync that indexes
+      // but cannot embed leaves the archive in a half-updated state that looks fine
+      // until someone runs a semantic query.
+      const ec = flag('index-only') ? null : embedConfig(cfg);
+      const t0 = Date.now();
+      console.log(bold('indexing'));
+      if (cfg.sourceType === 'windows-waren6') {
+        const r = await runWindowsIndex(cfg, { full: flag('full'), progress: m => console.log('  ' + m) });
+        console.log(`  ${r.added} new, ${r.recovered} texts recovered, ${r.windowsBuilt} windows built (${r.total} archived)`);
+      } else {
+        const r = runIndex(cfg.store, {
+          chatstorage: cfg.chatstorage,
+          full: flag('full'),
+          onProgress: (m) => console.log(`  ${m}`),
+        });
+        console.log(
+          `  ${r.newMessages} new, ${r.updatedMessages} updated, ` +
+            `${r.windowsBuilt} window(s) built  (${r.totalMessages} archived)`,
+        );
+      }
+      if (ec) {
+        console.log(bold('embedding'));
+        await embedMissing(cfg.store, ec, { onProgress });
+        const db = openStore(cfg.store);
+        const cov = vectorCoverage(db, ec);
+        db.close();
+        console.log(`  coverage: ${cov.embedded}/${cov.windows} (${cov.pct}%)`);
+        await calibrateIfUnset(cfg, cov.embedded);
+      }
+      console.log(`done in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+    } finally {
+      release();
+    }
     break;
   }
 

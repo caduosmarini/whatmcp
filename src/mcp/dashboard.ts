@@ -26,10 +26,8 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import express from 'express';
 
 import type { Config } from '../config.ts';
-import { runIndex } from '../index/indexer.ts';
-import { runWindowsIndex } from '../index/windows-source.ts';
-import { embedMissing } from '../index/embed.ts';
 import { invalidate } from '../store.ts';
+import { isScheduledSyncPaused, runSyncProcess, syncWorkerCommand, syncTimeoutMs } from '../sync-process.ts';
 import { searchHybrid, listThreads, listPeople, stats, type SearchContext } from '../search/search.ts';
 import * as wa from '../whatsapp/source.ts';
 import { recent, subscribe, emit } from './events.ts';
@@ -200,6 +198,8 @@ export function mountDashboard(app: express.Express, deps: DashboardDeps): void 
     if (!s.last_sync_at) {
       state = 'never';
       detail = 'The archive has never been synced.';
+    } else if (cfg.sourceType === 'windows-waren6') {
+      detail = `Windows snapshot last synced ${new Date(s.last_sync_at * 1000).toLocaleString()}; WhatsApp remains open during hot copy.`;
     } else if (!src.exists) {
       detail = 'WhatsApp Desktop store not found on this Mac.';
     } else if (src.mtime > s.last_sync_at) {
@@ -213,6 +213,11 @@ export function mountDashboard(app: express.Express, deps: DashboardDeps): void 
       detail = `WhatsApp has been active ${ago} more recently than the last sync.`;
     } else {
       detail = `Last synced ${new Date(s.last_sync_at * 1000).toLocaleString()}.`;
+    }
+
+    if (isScheduledSyncPaused()) {
+      state = 'behind';
+      detail += ' Scheduled sync is paused after a timeout; run a manual sync to retry.';
     }
 
     res.json({
@@ -317,46 +322,21 @@ export function mountDashboard(app: express.Express, deps: DashboardDeps): void 
     const emit = (msg: string) => res.write(JSON.stringify({ msg }) + '\n');
 
     try {
-      emit(full ? 'full re-read of the WhatsApp store…' : 'indexing new messages…');
-      const r = cfg.sourceType === 'windows-waren6'
-        ? await runWindowsIndex(cfg, { full, progress: emit })
-        : runIndex(cfg.store, {
-          chatstorage: cfg.chatstorage,
-          full,
-          onProgress: emit,
-        });
-      emit(
-        `indexed: ${'added' in r ? r.added : r.newMessages} new, ${'recovered' in r ? r.recovered : r.updatedMessages} updated, ` +
-          `${r.windowsBuilt} window(s) built, ${r.windowsDropped} replaced`,
-      );
-      if ('sourceReset' in r && r.sourceReset) {
-        emit("note: WhatsApp's local store had been rebuilt; fell back to a full pass. Nothing archived was lost.");
-      }
-
-      emit('embedding…');
-      const e = await embedMissing(cfg.store, embedCfg, {
-        onProgress: (ev) => {
-          if (ev.phase === 'start') {
-            emit(
-              ev.pending === 0
-                ? 'all windows already embedded'
-                : `${ev.pending} window(s) to embed, ~${ev.estTokens.toLocaleString()} tokens ` +
-                  `(est. $${ev.estCostUSD.toFixed(4)})`,
-            );
-          } else if (ev.phase === 'progress') {
-            emit(`  ${ev.done}/${ev.pending}  ${ev.rate}/s`);
-          } else if (ev.phase === 'done' && ev.embedded > 0) {
-            emit(
-              `embedded ${ev.embedded} in ${(ev.elapsedMs / 1000).toFixed(1)}s ` +
-                `($${ev.costUSD.toFixed(4)})`,
-            );
-          }
-        },
+      const [command, args] = syncWorkerCommand(full);
+      const timeoutMs = syncTimeoutMs(cfg.sourceType);
+        const code = await runSyncProcess(command, args, {
+          timeoutMs,
+        onOutput: (chunk) => emit(chunk.trimEnd()),
       });
+      invalidate(); // a failed child may still have indexed some messages
+      if (code !== 0) throw new Error(code === 124
+        ? `sync exceeded ${timeoutMs / 60000} minutes; scheduled sync is paused until a manual sync succeeds`
+        : code === 75
+          ? 'another sync is already running; this request was skipped'
+        : `sync exited with code ${code}`);
 
-      invalidate(); // the cached vector matrix is stale by construction now
       const s = stats(ctx());
-      emit(`done — ${s.messages} message(s) across ${s.threads} chat(s), ${e.embedded} newly embedded`);
+      emit(`done — ${s.messages} message(s) across ${s.threads} chat(s)`);
     } catch (err) {
       emit(`failed: ${(err as Error).message}`);
     } finally {

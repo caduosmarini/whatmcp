@@ -6,6 +6,7 @@ param(
     [string]$PythonPath,
     [string]$StorePath,
     [string]$CasesDirectory,
+    [string]$SourceDirectory,
     [switch]$Full,
     [switch]$ResultJson
 )
@@ -18,7 +19,7 @@ $logs = Join-Path $data 'logs'
 $waren6 = if ($Waren6Directory) { Join-Path $Waren6Directory 'waren6.ps1' } else { Join-Path $project 'WAren6\waren6.ps1' }
 $cli = Join-Path $project 'whatmcp\src\cli.ts'
 $node = $NodePath
-$source = Join-Path $env:LOCALAPPDATA 'Packages\5319275A.WhatsAppDesktop_cv1g1gvanyjgm'
+$source = if ($SourceDirectory) { $SourceDirectory } else { Join-Path $env:LOCALAPPDATA 'Packages\5319275A.WhatsAppDesktop_cv1g1gvanyjgm' }
 $runId = (Get-Date -Format 'yyyyMMdd-HHmmss') + "-$PID"
 $run = Join-Path $runs $runId
 $log = Join-Path $logs "hot-copy-$runId.log"
@@ -89,7 +90,8 @@ function Remove-OldRuns {
 
 try {
     New-Item -ItemType Directory -Path $logs, $runs -Force | Out-Null
-    $hasMutex = $mutex.WaitOne(0)
+    try { $hasMutex = $mutex.WaitOne(0) }
+    catch [Threading.AbandonedMutexException] { $hasMutex = $true }
     if (-not $hasMutex) { throw 'Another hot-copy sync is already running' }
     $runtimePath = Join-Path $data 'runtime-windows.json'
     if (-not $PythonPath -and (Test-Path -LiteralPath $runtimePath)) {

@@ -1,9 +1,11 @@
 Option Explicit
-
-Dim shell, files, runner, command, exitCode
+Dim shell, files, project, checkout, node, command, exitCode
 Set shell = CreateObject("WScript.Shell")
 Set files = CreateObject("Scripting.FileSystemObject")
-runner = files.BuildPath(files.GetParentFolderName(WScript.ScriptFullName), "sync-hotcopy-windows.ps1")
-command = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File """ & runner & """"
+checkout = files.GetParentFolderName(files.GetParentFolderName(WScript.ScriptFullName))
+project = files.GetParentFolderName(checkout)
+shell.Environment("PROCESS")("WHATMCP_HOME") = files.BuildPath(project, "data")
+node = files.BuildPath(shell.ExpandEnvironmentStrings("%ProgramFiles%"), "nodejs\node.exe")
+command = """" & node & """ --experimental-sqlite --experimental-strip-types --no-warnings """ & files.BuildPath(checkout, "src\cli.ts") & """ sync --scheduled --index-only"
 exitCode = shell.Run(command, 0, True)
 WScript.Quit exitCode

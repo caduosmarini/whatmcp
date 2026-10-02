@@ -4,7 +4,7 @@ The iPhone backup is the historical base. Windows Desktop contributes later
 messages to the **same durable archive**. Neither source is ever overwritten.
 The Windows app's local databases are encrypted; pointing WhatMCP at
 `genericStorage.db` does not work. WhatMCP invokes the separate
-[WAren6](https://github.com/MayukXT/WAren6) GPL-3.0 tool in offline mode, then
+[WAren6 fork](https://github.com/caduosmarini/WAren6) GPL-3.0 tool in offline mode, then
 imports its validated `unified_whatsapp.db`. No WAren6 code is bundled here.
 
 ## One-time setup
@@ -13,7 +13,7 @@ imports its validated `unified_whatsapp.db`. No WAren6 code is bundled here.
 2. Clone WAren6 separately and review its requirements:
 
    ```powershell
-   git clone https://github.com/MayukXT/WAren6.git C:\path\to\WAren6
+   git clone https://github.com/caduosmarini/WAren6.git C:\path\to\WAren6
    ```
 
 3. Keep the WhatMCP archive and API key outside the checkout. If using a
@@ -44,72 +44,59 @@ imports its validated `unified_whatsapp.db`. No WAren6 code is bundled here.
    `--full` intentionally scans all available Windows records, without deleting
    the iPhone history. Embedding sends new text windows to OpenAI, as in macOS.
 
-## Acquisition and scheduled sync
+## Acquisition without closing WhatsApp
 
-`npm run sync` with the Windows source runs WAren6 offline
-(`-f -n -NoArchive`), with no media copy, Telegram transfer, or online
-dependency bootstrap. It accepts only a new case whose validation report says
-`ok`, imports it, then embeds new windows. Each WAren6 case contains decrypted
-personal data and key material. Keep the output in a private directory, out of
-Git and cloud-sync folders; do not share its logs or database.
+`npm run sync` uses `scripts/sync-hotcopy-windows.ps1` to copy LocalState,
+WebView2 IndexedDB and Local Storage while WhatsApp remains open. It then runs
+WAren6 offline against that copy with `-f -n -NoArchive -PreservedCopy`, validates
+the new case and imports its `unified_whatsapp.db`. Manual sync also embeds new
+windows. There is no close/reopen step or confirmation dialog.
 
-**Current limitation:** WAren6 2.0.0 closes a running WhatsApp even in offline
-mode, to release file locks. When WhatsApp is running, WhatMCP shows a Windows
-Yes/No dialog before acquisition. No cancels without closing the app. After
-an accepted run, WhatMCP attempts to reopen it as soon as acquisition is
-complete, while decryption and import continue. It also attempts to reopen
-after an early extraction failure. A
-shared lock suppresses a second sync and dialog while one is awaiting approval
-or extracting; stale locks from crashed processes are recovered. This needs
-an interactive Windows session. Closing WhatsApp yourself before a manual
-`npm run sync` also works.
+Use the WAren6 fork's preserved-copy implementation, starting at commit
+`e53aa64`. It refuses an incomplete preserved source instead of falling back to
+live acquisition. Upstream WAren6 remains available at
+https://github.com/MayukXT/WAren6. WhatMCP invokes this GPL-3.0 dependency as a
+separate process; its implementation is not bundled in this MIT repository.
 
-`npm run wa -- sync-every <hours>` registers a per-user Windows Task Scheduler
-job; `sync-every 0` removes it. Registration is refused unless
-`WHATMCP_WINDOWS_ALLOW_STOP_WHATSAPP=1` is explicitly set. This opts into
-scheduled prompts, not automatic approval of closing WhatsApp. No task is
-installed by setup automatically. The job uses the configured `WHATMCP_HOME`,
-does not put the API key or iPhone backup password in its command line, and
-avoids overlapping runs. Be aware that each run currently performs a full
-WAren6 extraction and may close WhatsApp. In a 249k-message corpus, that took
-about eight minutes and roughly 2.4 GB peak process memory; a short cadence is
-not advisable.
+A live file copy is not an atomic snapshot. Files can change during copying;
+copy diagnostics, WAren6 validation and SQLite integrity checks gate import.
+Failed validation rejects the run and preserves the existing archive. Successful
+checks establish that the captured case is usable, not that every live message
+was captured at one exact instant. A later sync revisits recent messages.
 
-## Why not copy the live database?
+Cases contain decrypted personal data and key material. Keep cases, logs,
+configuration, certificates and the archive outside Git and cloud-sync folders.
+The hot-copy pipeline keeps its latest two generated runs.
 
-The Windows app stores encrypted SQLite plus WAL and WebView2 IndexedDB. A
-plain file-by-file copy while it writes can mix different moments and omit
-committed WAL data. A possible non-disruptive path is one VSS snapshot of the
-volume, copying **only the WhatsApp files** from that instant, then running
-WAren6 against the copy. VSS without a WhatsApp writer is crash-consistent,
-not application-consistent. This path has **not** been implemented or validated
-here; automatic no-close sync must not claim to work yet. It will also need an
-incremental extractor to avoid WAren6's expensive full unification every time.
+## Scheduled collection
 
-## No-close native-source options (research, not enabled)
+For the sibling `whatmcp`, `WAren6` and private `data` directory layout, run:
 
-The requirement here is to use data from the **installed WhatsApp for Windows**,
-not a second WhatsApp Web/Chromium session.
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/register-hotcopy-task.ps1 -IntervalHours 2
+```
 
-- **VSS + WAren6:** make one point-in-time shadow copy of the NTFS volume and
-  copy only the app's LocalState, IndexedDB, and Local Storage from it. Adapt
-  WAren6 to skip its unconditional WhatsApp shutdown when given an offline
-  copy. The snapshot is crash-consistent without a WhatsApp VSS writer, so
-  decrypt, run SQLite integrity checks, and compare source/message coverage
-  before accepting any import. This machine exposes the VSS API but the
-  current shell is not administrator; no VSS test has been run.
-- **Existing-app WebView2 runtime:** WAren6 has a research capture that asks
-  the installed app's Store 8 for decoded rows through a DevTools endpoint.
-  This is not a second browser session, but the endpoint is not currently
-  enabled here. WebView2 generally needs a one-time app restart to enable
-  remote debugging. WAren6 currently restarts the app for each capture and
-  calls `table.all()`, so it is neither no-close nor incremental as shipped.
-  A separate implementation would need a safe local endpoint, paginated
-  changed-row queries, checkpoints, and tests after app updates. The endpoint
-  must not be exposed beyond loopback.
-- **Plain robocopy of live files:** rejected for automation because files can
-  represent different moments and the DB/WAL pair can be inconsistent.
+The `WhatMCP Hot Copy` task uses an invisible launcher under the interactive
+user's profile. The user must be signed in. Configure `data/runtime-windows.json`
+with `python_path` when Python is unavailable on that user's PATH. The task
+collects, validates and imports; it does not add embedding API calls.
 
-WAren6 is GPL-3.0 and WhatMCP is MIT. This repo invokes WAren6 as a separate
-dependency; copying its implementation into WhatMCP would require a licensing
-decision and careful attribution. No automatic no-close capture is claimed yet.
+Alternatively, `npm run wa -- sync-every <hours>` creates the per-user
+`WhatMCP Sync` task, which also embeds missing windows. `sync-every 0` removes
+that task. Choose one schedule to avoid redundant acquisitions. Both use the
+supervised sync worker, and neither closes WhatsApp or places credentials on
+the command line.
+
+## Upstream v0.2.0 integration
+
+Windows sync uses the upstream supervised worker and SQLite process lock, with a
+30-minute timeout (ChatStorage keeps the upstream 5-minute timeout). A timeout
+pauses scheduled attempts until a successful manual retry. On Windows the worker
+and its helper processes are terminated together; WhatsApp remains open.
+
+The hidden scheduled launcher runs `sync --scheduled --index-only`: collection,
+validation and import remain automatic, without adding embedding API calls to the
+existing schedule. A manual `sync --index-only` can retry collection after a
+timeout; `sync` also completes embeddings. Configure `windows_source_path` when
+a service account must refer to another user's live WhatsApp package directory.
+The account must have access to the source and any required user credentials.

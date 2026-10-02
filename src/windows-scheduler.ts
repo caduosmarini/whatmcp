@@ -33,7 +33,7 @@ export function renderWindowsSyncLauncher(
     `$env:WHATMCP_HOME = ${ps(home)}`,
     ...(source ? [`$env:WHATMCP_CHATSTORAGE = ${ps(source)}`] : []),
     `$log = ${ps(logPath)}`,
-    `& ${ps(nodePath)} ${NODE_FLAGS.map(ps).join(' ')} ${ps(cliPath)} 'sync' *>> $log`,
+    `& ${ps(nodePath)} ${NODE_FLAGS.map(ps).join(' ')} ${ps(cliPath)} 'sync' '--scheduled' *>> $log`,
     'exit $LASTEXITCODE',
     '',
   ].join('\r\n');

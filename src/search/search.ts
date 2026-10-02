@@ -442,6 +442,54 @@ export function getConversation(ctx: SearchContext, p: ConversationParams): Msg[
   return [...before.reverse(), ...after] as Msg[];
 }
 
+// --- chronological message feed ---------------------------------------------
+
+export interface MessageFeedParams {
+  after: number;
+  before: number;
+  thread_id?: string;
+  limit: number;
+  last?: { ts: number; id: string };
+}
+
+export interface FeedMessage extends Msg {
+  thread_id: string;
+  thread_title: string | null;
+  thread_kind: string;
+}
+
+/**
+ * Enumerate individual archived messages without retrieval ranking or embeddings.
+ * The (ts, id) keyset includes every tied timestamp exactly once across pages.
+ * Fetch one extra row so the caller can distinguish completion from a full page.
+ */
+export function listMessageFeed(
+  ctx: SearchContext,
+  p: MessageFeedParams,
+): { messages: FeedMessage[]; hasMore: boolean } {
+  const db = getStore(ctx.storePath, modelTag(ctx.embedCfg)).db;
+  const rows = db.prepare(`
+    SELECT m.id, m.thread_id, t.title AS thread_title, t.kind AS thread_kind,
+           m.ts, m.text, m.kind, m.is_from_me,
+           CASE WHEN m.is_from_me = 1 THEN 'me'
+                ELSE COALESCE(s.display_name, s.id, 'unknown') END AS sender_name
+    FROM messages m
+    JOIN threads t ON t.id = m.thread_id
+    LEFT JOIN senders s ON s.id = m.sender_id
+    WHERE m.ts >= ? AND m.ts <= ?
+      ${p.thread_id ? 'AND m.thread_id = ?' : ''}
+      ${p.last ? 'AND (m.ts, m.id) > (?, ?)' : ''}
+    ORDER BY m.ts ASC, m.id ASC
+    LIMIT ?
+  `).all(
+    p.after, p.before,
+    ...(p.thread_id ? [p.thread_id] : []),
+    ...(p.last ? [p.last.ts, p.last.id] : []),
+    p.limit + 1,
+  ) as FeedMessage[];
+  return { messages: rows.slice(0, p.limit), hasMore: rows.length > p.limit };
+}
+
 // --- chats, people, timeline -------------------------------------------------
 
 export interface Thread {

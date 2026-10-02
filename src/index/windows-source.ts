@@ -56,6 +56,7 @@ export function runHotCopy(
       '-DataDirectory', DATA_DIR, '-Waren6Directory', cfg.windowsWaren6Path!,
       '-NodePath', process.execPath, '-StorePath', cfg.store,
       '-CasesDirectory', cfg.windowsOutputDir, '-ResultJson',
+      ...(cfg.windowsSourcePath ? ['-SourceDirectory', cfg.windowsSourcePath] : []),
       ...(opts.full ? ['-Full'] : []),
     ], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let pending = '';
