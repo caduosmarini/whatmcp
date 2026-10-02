@@ -7,7 +7,14 @@ and must not be committed. The installer expands `@PROJECT@` to the project root
 The service runs as LocalService, starts automatically after boot, and recovers
 after process failures. Grant this account read/execute permissions on the MCP
 checkout, read/write permissions on the archive/log directory, and read-only
-access to private TLS settings. If Node reports an ancestor-directory `lstat`
+access to private TLS settings. For synchronization through MCP, LocalService
+also needs read/execute access to the separate WAren6 checkout and Python
+runtime, and read access to the WhatsApp LocalState, IndexedDB and Local Storage
+source directories. Configure `windows_source_path` explicitly; LocalService
+does not use the interactive user's LOCALAPPDATA. Grant only traversal and
+read-attributes on ancestor directories. No write access to the live WhatsApp
+source is required. The interactive scheduled task alone working does not
+verify service-account access. If Node reports an ancestor-directory `lstat`
 permission error, grant only traversal and read-attributes on that directory.
 
 Configure `WHATMCP_HOME` with a private `config.json` containing a randomly

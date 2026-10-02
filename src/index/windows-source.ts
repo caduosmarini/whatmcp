@@ -100,7 +100,16 @@ export async function runWindowsIndex(
   if (process.platform !== 'win32') throw new Error('WAren6 source requires Windows');
   if (!cfg.windowsWaren6Path) throw new Error('Set windows_waren6_path in config.json before syncing from Windows');
   const waren6 = join(cfg.windowsWaren6Path, 'waren6.ps1');
-  if (!existsSync(waren6)) throw new Error(`WAren6 script not found: ${waren6}`);
+  try {
+    if (!statSync(waren6).isFile()) throw new Error(`WAren6 script is not a file: ${waren6}`);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') throw new Error(`WAren6 script not found: ${waren6}`);
+    if (code === 'EACCES' || code === 'EPERM') {
+      throw new Error(`WAren6 script inaccessible (${code}): ${waren6}; check read and ancestor traversal permissions for the service account`);
+    }
+    throw error;
+  }
   const script = fileURLToPath(new URL('../../scripts/sync-hotcopy-windows.ps1', import.meta.url));
   if (!existsSync(script)) throw new Error(`Hot-copy script not found: ${script}`);
   return withWindowsSyncLock(join(DATA_DIR, 'windows-sync.lock'), () => {
