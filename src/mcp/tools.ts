@@ -160,7 +160,8 @@ export function buildServer(deps: ToolDeps): McpServer {
     if (cfg.sourceType === 'windows-waren6') {
       const s = snapshot ?? stats(ctx());
       return `Windows data is a snapshot, not a live feed. Latest archived message: ${iso(s.latest)}. ` +
-        'Run sync_archive to acquire recent Windows messages (WhatsApp stays open during the validated hot copy).';
+        `Last successful sync: ${s.last_sync_at ? iso(s.last_sync_at) : 'never'}. ` +
+        'Use the archive for routine queries. Request sync_archive only when the user asks for a refresh or newer data is necessary; it can take several minutes and keeps WhatsApp open.';
     }
     const src = wa.sourceInfo(cfg.chatstorage);
     if (!src.exists) return 'WhatsApp Desktop store not found on this Mac.';
@@ -586,7 +587,10 @@ export function buildServer(deps: ToolDeps): McpServer {
           'messages, then embed anything missing. Read-only with respect to WhatsApp ' +
           'itself — it copies and reads, and never writes or sends. Takes seconds for ' +
           'a routine catch-up. Use when get_archive_status reports the archive is ' +
-          'behind, or when a search for something recent finds nothing.'),
+          'behind, or when a search for something recent finds nothing.') +
+          ' Do not call this before every query. Read tools use the existing archive without syncing. ' +
+          'Call only when the user requests a refresh or the answer requires data newer than the last successful sync. ' +
+          'Windows synchronization can take several minutes (up to a 30-minute timeout).',
         inputSchema: {
           full: z.boolean().optional()
             .describe('Re-read the entire WhatsApp store rather than only new messages. ' +
