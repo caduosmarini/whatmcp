@@ -53,7 +53,8 @@ the new case and imports its `unified_whatsapp.db`. Manual sync also embeds new
 windows. There is no close/reopen step or confirmation dialog.
 
 Use the WAren6 fork's preserved-copy implementation, starting at commit
-`e53aa64`. It refuses an incomplete preserved source instead of falling back to
+`e53aa64`. Use `3fd7f19` or newer for the quoted-reply index that avoids
+repeated full-chat scans during unification. It refuses an incomplete preserved source instead of falling back to
 live acquisition. Upstream WAren6 remains available at
 https://github.com/MayukXT/WAren6. WhatMCP invokes this GPL-3.0 dependency as a
 separate process; its implementation is not bundled in this MIT repository.

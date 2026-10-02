@@ -32,5 +32,6 @@ The `WhatMCP Hot Copy` task is separate from the service. It runs under the
 interactive user's profile. Configure `runtime-windows.json` with `python_path`
 when Python is not available on that user's PATH. Extraction requires the
 preserved-copy support from https://github.com/caduosmarini/WAren6,
-starting at commit `e53aa64`. Keep that repository as the WAren6 dependency;
+starting at commit `e53aa64`; use `3fd7f19` or newer for fast quoted-message
+unification. Keep that repository as the WAren6 dependency;
 https://github.com/MayukXT/WAren6 remains its upstream project.
