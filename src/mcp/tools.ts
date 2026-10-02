@@ -28,7 +28,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { type Config, CONFIG_PATH } from '../config.ts';
 import {
   searchHybrid, getConversation, listThreads, listPeople,
-  getTimeline, getThreadSummary, stats, type SearchContext,
+  getTimeline, getThreadSummary, stats, type SearchContext, type Stats,
 } from '../search/search.ts';
 import { runIndex } from '../index/indexer.ts';
 import { runWindowsIndex } from '../index/windows-source.ts';
@@ -132,15 +132,15 @@ export function buildServer(deps: ToolDeps): McpServer {
    * second is usually what the user is asking about. Reads the live file's mtime
    * only — no snapshot, no copy, so it costs microseconds.
    */
-  function freshness(): string {
+  function freshness(snapshot?: Stats): string {
     if (cfg.sourceType === 'windows-waren6') {
-      const s = stats(ctx());
+      const s = snapshot ?? stats(ctx());
       return `Windows data is a snapshot, not a live feed. Latest archived message: ${iso(s.latest)}. ` +
-        'Run sync_archive to acquire recent Windows messages (WAren6 asks before closing WhatsApp).';
+        'Run sync_archive to acquire recent Windows messages (WhatsApp stays open during the validated hot copy).';
     }
     const src = wa.sourceInfo(cfg.chatstorage);
     if (!src.exists) return 'WhatsApp Desktop store not found on this Mac.';
-    const s = stats(ctx());
+    const s = snapshot ?? stats(ctx());
     if (!s.last_sync_at) return 'The archive has never been synced.';
     const behindS = src.mtime - s.last_sync_at;
     if (behindS <= 0) return `Archive is current (last sync ${iso(s.last_sync_at)}).`;
@@ -472,7 +472,7 @@ export function buildServer(deps: ToolDeps): McpServer {
           `  embedded:  ${s.embedded}/${s.windows} (${pct}%) — ${s.model}\n` +
           `  range:     ${iso(s.earliest)} to ${iso(s.latest)}\n` +
           `  last sync: ${s.last_sync_at ? iso(s.last_sync_at) : 'never'}\n\n` +
-          freshness() +
+          freshness(s) +
           (pct < 100
             ? `\n\n${s.windows - s.embedded} window(s) have no vector, so semantic ` +
               `search cannot see them. Run sync_archive to finish embedding.`
@@ -489,8 +489,8 @@ export function buildServer(deps: ToolDeps): McpServer {
         description:
           (cfg.sourceType === 'windows-waren6'
             ? 'Acquire and import the encrypted Windows Desktop store with WAren6. ' +
-              'This can take minutes. If WhatsApp is running, a Windows confirmation ' +
-              'dialog asks before closing it; WhatMCP then attempts to reopen it. '
+              'This can take minutes. Uses the same validated hot-copy pipeline as the ' +
+              'scheduled sync, while WhatsApp remains open; no close confirmation is needed. '
             : 'Bring the local archive up to date with WhatsApp Desktop: index new ' +
           'messages, then embed anything missing. Read-only with respect to WhatsApp ' +
           'itself — it copies and reads, and never writes or sends. Takes seconds for ' +

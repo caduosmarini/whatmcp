@@ -137,9 +137,10 @@ switch (cmd) {
     }
     const cfg = loadConfig();
     const r = importWindowsUnified(cfg.store, resolve(path), {
-      full: flag('full'), progress: m => console.log('  ' + m),
+      full: flag('full'), progress: flag('json') ? undefined : m => console.log('  ' + m),
     });
-    console.log(`imported: ${r.added} new, ${r.recovered} texts recovered, ${r.skipped} without stable IDs; ${r.windowsBuilt} windows built`);
+    if (flag('json')) console.log(JSON.stringify(r));
+    else console.log(`imported: ${r.added} new, ${r.recovered} texts recovered, ${r.skipped} without stable IDs; ${r.windowsBuilt} windows built`);
     break;
   }
 

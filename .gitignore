@@ -15,3 +15,19 @@ windows-cases/
 config.json
 
 .DS_Store
+
+# Machine-local deployment state and secrets
+*.pfx
+*.p12
+*.key
+*.pem
+*.cer
+*.log
+deploy/windows/*.exe
+deploy/windows/whatmcp-service.xml
+docs/*.local.md
+scripts/enable-firewall.ps1
+scripts/prepare-local-tls.py
+scripts/verify-https.mjs
+runtime-windows.json
+tls-runtime.json

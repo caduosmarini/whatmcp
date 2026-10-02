@@ -22,7 +22,7 @@ test('scheduled launcher carries configured paths without a backup password or A
   assert.match(launcher, /WHATMCP_HOME = 'C:\\whatmcp'/);
   assert.match(launcher, /WHATMCP_CHATSTORAGE = 'C:\\WhatsApp\\ChatStorage.sqlite'/);
   assert.match(launcher, /O''Brien/);
-  assert.match(launcher, /WHATMCP_WINDOWS_ALLOW_STOP_WHATSAPP = '1'/);
+  assert.doesNotMatch(launcher, /ALLOW_STOP_WHATSAPP/);
   assert.doesNotMatch(launcher, /BACKUP_PASSWORD|OPENAI_API_KEY/);
 });
 

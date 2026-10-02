@@ -32,7 +32,6 @@ export function renderWindowsSyncLauncher(
   return [
     `$env:WHATMCP_HOME = ${ps(home)}`,
     ...(source ? [`$env:WHATMCP_CHATSTORAGE = ${ps(source)}`] : []),
-    "$env:WHATMCP_WINDOWS_ALLOW_STOP_WHATSAPP = '1'",
     `$log = ${ps(logPath)}`,
     `& ${ps(nodePath)} ${NODE_FLAGS.map(ps).join(' ')} ${ps(cliPath)} 'sync' *>> $log`,
     'exit $LASTEXITCODE',
@@ -54,12 +53,6 @@ export function renderWindowsSyncTask(launcher: string, minutes: number, start: 
 }
 
 export function installWindowsSyncTask(hours: number, repo: string): void {
-  if (process.env.WHATMCP_WINDOWS_ALLOW_STOP_WHATSAPP !== '1') {
-    throw new Error(
-      'Windows automatic sync may close WhatsApp. To opt in, set ' +
-      'WHATMCP_WINDOWS_ALLOW_STOP_WHATSAPP=1 and run sync-every again.',
-    );
-  }
   const minutes = syncIntervalMinutes(hours);
   const logs = join(DATA_DIR, 'logs');
   if (!existsSync(logs)) mkdirSync(logs, { recursive: true });
