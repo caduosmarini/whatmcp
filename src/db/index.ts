@@ -46,7 +46,8 @@ export function openStoreRO(path: string): DB {
     );
   }
 
-  hardenStoreFiles(path);
+  // Readers may lack chmod permission even when the archive is readable.
+  // File permissions are hardened by openStore() on the write path.
   const db = new DatabaseSync(path, { readOnly: true });
   const have = currentVersion(db);
   const want = targetVersion();
