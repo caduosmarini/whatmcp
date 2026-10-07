@@ -49,14 +49,14 @@ function Copy-LiveDirectory([string]$relative, [string]$destination, [bool]$excl
     New-Item -ItemType Directory -Path $to -Force | Out-Null
     $copyLog = Join-Path $logs ("robocopy-$runId-" + ($destination -replace '[\\/ ]', '-') + '.log')
     $arguments = @($from, $to, '/E', '/R:1', '/W:1', '/MT:8', '/NP', '/NFL', '/NDL', '/NJH', '/NJS')
-    if ($excludeTransfers) { $arguments += @('/XD', (Join-Path $from 'transfers')) }
+    if ($excludeTransfers) { $arguments += @('/XD', 'transfers') }
     & robocopy.exe @arguments *> $copyLog
     $code = $LASTEXITCODE
     if ($code -ge 8) { throw "Robocopy failed for $relative with exit code $code; see $copyLog" }
 
     # These counts are diagnostics. Live LevelDB files may change after this check.
     $sourceFiles = @(Get-ChildItem -LiteralPath $from -Recurse -File | Where-Object {
-        -not $excludeTransfers -or $_.FullName -notlike "$(Join-Path $from 'transfers')\*"
+        -not $excludeTransfers -or $_.FullName -notmatch '[\\/]transfers[\\/]'
     })
     $missing = 0
     $sizeChanged = 0
@@ -76,16 +76,31 @@ function Copy-LiveDirectory([string]$relative, [string]$destination, [bool]$excl
     Write-RunLog "Copy $relative exit=$code files=$($copiedFiles.Count) missing_now=$missing size_changed_now=$sizeChanged"
 }
 
+function Write-OwnedMarker([string]$directory, [string]$state) {
+    [ordered]@{ schema = 'whatmcp.hotcopy.v1'; run_id = $runId; status = $state } |
+        ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $directory '.whatmcp-hotcopy.json') -Encoding UTF8
+}
+
 function Remove-OldRuns {
-    $root = [IO.Path]::GetFullPath($runs).TrimEnd('\') + '\'
-    $oldRuns = @(Get-ChildItem -LiteralPath $runs -Directory | Sort-Object Name -Descending | Select-Object -Skip 2)
-    foreach ($old in $oldRuns) {
-        $target = [IO.Path]::GetFullPath($old.FullName)
-        if (-not $target.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) {
-            throw "Refusing cleanup outside hot-copy-runs: $target"
-        }
-        Remove-Item -LiteralPath $target -Recurse -Force
-        Write-RunLog "Pruned generated run $($old.Name); retained the two newest runs"
+    $cleanup = Join-Path $PSScriptRoot 'prune-windows-cases.ts'
+    $roots = @($runs)
+    if ($CasesDirectory) { $roots += $CasesDirectory }
+    foreach ($root in $roots) {
+        & $node --experimental-strip-types --no-warnings $cleanup $root $runId
+        if ($LASTEXITCODE -ne 0) { throw "Cleanup failed for $root" }
+    }
+}
+
+function Copy-AudioTransfers {
+    # Database and WebView evidence are copied separately. Preserve only known
+    # audio formats from transfer folders; images/documents are not imported.
+    $local = Join-Path $source 'LocalState'
+    foreach ($folder in @(Get-ChildItem -LiteralPath $local -Recurse -Directory -Filter 'transfers')) {
+        $relative = $folder.FullName.Substring($local.Length).TrimStart('\')
+        $destination = Join-Path (Join-Path $run 'LocalState') $relative
+        $copyLog = Join-Path $logs ("audio-copy-$runId-" + ($relative -replace '[\\/ ]','-') + '.log')
+        & robocopy.exe $folder.FullName $destination '*.ogg' '*.opus' '*.mp3' '*.wav' '*.m4a' '*.aac' '*.amr' '*.flac' '*.webm' /E /XJ /R:1 /W:1 /NP /NFL /NDL *> $copyLog
+        if ($LASTEXITCODE -ge 8) { throw "Audio transfer copy failed; see $copyLog" }
     }
 }
 
@@ -106,14 +121,17 @@ try {
     if (-not (Test-Path -LiteralPath $waren6 -PathType Leaf)) { throw "WAren6 missing: $waren6" }
     if (-not (Test-Path -LiteralPath $node -PathType Leaf)) { throw "Node.js missing: $node" }
     New-Item -ItemType Directory -Path $run -Force | Out-Null
+    Write-OwnedMarker $run 'created'
     Write-RunLog "START run=$runId whatsapp_running=$([bool](Get-Process -Name WhatsApp.Root -ErrorAction SilentlyContinue))"
 
     Copy-LiveDirectory 'LocalState' 'LocalState' $true
+    Copy-AudioTransfers
     Copy-LiveDirectory 'LocalCache\EBWebView\Default\IndexedDB' 'LocalCache\EBWebView\Default\IndexedDB'
     Copy-LiveDirectory 'LocalCache\EBWebView\Default\Local Storage' 'LocalCache\EBWebView\Default\Local Storage'
 
     $caseOutput = if ($CasesDirectory) { Join-Path $CasesDirectory $runId } else { Join-Path $run 'cases' }
     New-Item -ItemType Directory -Path $caseOutput -Force | Out-Null
+    Write-OwnedMarker $caseOutput 'created'
     $extractorLog = Join-Path $logs "waren6-$runId.log"
     Write-RunLog 'Starting WAren6 on copied evidence; WhatsApp remains open'
     & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $waren6 `
@@ -169,6 +187,8 @@ try {
     }
     Add-Content -LiteralPath $summaryPath -Value ($summary | ConvertTo-Json -Compress -Depth 5) -Encoding UTF8
     if ($hasMutex) {
+        if (Test-Path -LiteralPath (Join-Path $run '.whatmcp-hotcopy.json')) { Write-OwnedMarker $run $status }
+        if ($caseOutput -and (Test-Path -LiteralPath (Join-Path $caseOutput '.whatmcp-hotcopy.json'))) { Write-OwnedMarker $caseOutput $status }
         try { Remove-OldRuns } catch { Write-RunLog "Cleanup warning: $($_.Exception.Message)" }
         $mutex.ReleaseMutex() | Out-Null
     }
