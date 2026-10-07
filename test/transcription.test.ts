@@ -458,3 +458,19 @@ test('inventory does not overwrite a media reference replaced by concurrent sync
     assert.equal(row.sha256, null);
   } finally {db.close();rmSync(f.dir,{recursive:true,force:true});}
 });
+
+
+test('an empty replacement cannot remove usable words for identical audio bytes', async () => {
+  const f=fixture();
+  try {
+    await runTranscription(f.cfg,mockOptions(()=> 'palavras reconhecidas'));
+    const replaced=await runTranscription({...f.cfg,transcriptionModel:'apple-dictation'},
+      {...mockOptions(()=>''),reprocess:true});
+    assert.equal(replaced.noSpeech,1);
+    const db=openStore(f.store);
+    assert.match((db.prepare('SELECT text FROM windows').get() as any).text,/palavras reconhecidas/);
+    assert.equal((db.prepare('SELECT model FROM active_transcripts').get() as any).model,'apple-speech');
+    assert.equal((db.prepare("SELECT status FROM audio_transcripts WHERE model='apple-dictation'").get() as any).status,'no_speech');
+    db.close();
+  } finally {rmSync(f.dir,{recursive:true,force:true});}
+});

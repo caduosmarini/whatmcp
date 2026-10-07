@@ -123,14 +123,17 @@ export function prepareReadyCandidates(db: DB, cfg: Config, limit = 25): number 
       for (const row of media) {
         const old = (prior.get(row.message_id) ?? db.prepare(`SELECT * FROM audio_transcripts
           WHERE message_id=? AND audio_sha256=? AND status IN ('done','no_speech')
-          ORDER BY updated_at DESC LIMIT 1`).get(row.message_id,row.sha256)) as SelectedTranscript | undefined;
+          ORDER BY updated_at DESC LIMIT 1`).get(row.message_id,row.sha256)) as (SelectedTranscript & {status:string}) | undefined;
         // Turning processing off never removes an already archived transcript.
         if (!state.desired_model) { if (old) picks.push(old); continue; }
         const target = row.sha256 ? requested.get(row.message_id, row.sha256,
           state.desired_model, state.desired_revision, state.desired_locale) as
           (SelectedTranscript & { status: string }) | undefined : undefined;
         if (target && ['done','no_speech'].includes(target.status)) {
-          picks.push(target);
+          // A model's empty response is not proof that already recognized speech
+          // vanished. Keep useful text for the identical bytes.
+          picks.push(target.status === 'no_speech' && old?.status === 'done' &&
+            old.audio_sha256 === row.sha256 ? old : target);
         } else {
           if (old) picks.push(old);
           // A default-model change alone does not invalidate usable old work.

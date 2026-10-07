@@ -100,7 +100,8 @@ npm run wa -- transcribe --limit=100  # continue the queued replacement work
 ```
 
 During replacement, previous usable transcripts remain visible until the new
-result is ready. Conversation reads identify an older transcript when its source
+result is ready. An empty replacement preserves already recognized words for
+identical audio bytes; the empty result remains archived. Conversation reads identify an older transcript when its source
 file has changed. Setting `transcription_model` to `null` pauses new processing;
 it preserves published transcripts and their search windows.
 
