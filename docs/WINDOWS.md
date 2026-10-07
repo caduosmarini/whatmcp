@@ -67,7 +67,28 @@ was captured at one exact instant. A later sync revisits recent messages.
 
 Cases contain decrypted personal data and key material. Keep cases, logs,
 configuration, certificates and the archive outside Git and cloud-sync folders.
-The hot-copy pipeline keeps its latest two generated runs.
+The hot-copy pipeline keeps its latest two owned runs and its last successful
+run if older. The same policy covers the external `windows_output_dir` cases.
+Only directories with a matching WhatMCP ownership marker are pruned; existing
+unmarked cases and user backups are preserved. Imported audio lives outside
+these ephemeral cases, under `WHATMCP_HOME/media/windows`, so pruning a case
+cannot remove linked voice messages.
+
+## Audio and setup
+
+`npm run setup` lets Windows users choose native WAren6 acquisition or a
+compatible ChatStorage import. `doctor` validates the selected source. Native
+acquisition preserves known audio formats from transfer folders, in addition to
+the WebView database evidence. Images and documents are not imported into the
+media/transcription archive. Only audio actually present locally and attributed
+unambiguously can be transcribed; extraction does not retrieve missing audio
+from WhatsApp servers.
+
+The audio importer verifies bytes against the case hash and size, preserves
+stable message IDs, and discovers late media even below the message watermark.
+It retains existing transcripts and searchable text while replacement audio is
+pending. See [Audio transcription](AUDIO.md) for opt-in `gpt-transcribe`, one
+default language (`pt-BR`), decoder paths, costs and manual processing.
 
 ## Scheduled collection
 
@@ -112,3 +133,12 @@ connection to apply it. Remote clients need their own timeout configuration.
 The source service and scheduled task are independent of that client setting.
 Read tools query the existing archive without triggering collection; request
 `sync_archive` only for an explicit refresh or when newer data is necessary.
+
+## Validation
+
+CI runs the synthetic/offline suite on macOS and Windows, including PowerShell
+syntax and the Windows subprocess protocol. The native Apple speech smoke check
+is separate and opt-in. These checks do not exercise a live encrypted WhatsApp
+package, a real WAren6 acquisition, Windows account credentials, or a paid audio
+API request. Validate one real collection under the intended Windows service or
+interactive account before relying on that environment.
