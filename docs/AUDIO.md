@@ -134,7 +134,7 @@ checks that a second run does no duplicate work:
 
 ```sh
 WHATMCP_HOME="$(mktemp -d)" node --experimental-sqlite --experimental-strip-types \
-  --no-warnings test/native-audio.smoke.ts
+  --no-warnings scripts/native-audio.smoke.ts
 ```
 
 It does not use the live WhatsApp store, upload audio, or download models.
