@@ -129,7 +129,16 @@ model request merely to estimate the work.
 `npm run sync` continues to import messages and media references. It does not
 perform transcription inside sync. This avoids blocking routine sync on a model
 download, a privacy dialog, or the transcription API. To process new audio,
-run `transcribe` again. Windows scheduled sync uses WAren6 and preserves the
+run `transcribe` again. The macOS LaunchAgent instead uses `scheduled-sync`:
+it captures new messages/media references, runs `transcribe --limit=100` when a
+model is enabled, then runs normal sync to embed published transcripts. This
+bounded batch resumes the historical backlog over later runs; it never requests
+reprocessing of completed audio. Capture and final sync have their configured
+watchdog; transcription retains its independent per-segment timeouts. If
+transcription fails, the final sync still captures messages and embeds usable
+results. A paused sync schedule skips the entire cycle until a successful manual
+sync. Reinstall an existing macOS agent with `npm run wa -- sync-every <hours>`
+to pick up this workflow. Windows scheduled sync uses WAren6 and preserves the
 available audio; choose `gpt-transcribe` explicitly and provide `ffmpeg`/`ffprobe`
 on the account's PATH (or configure their paths) before processing it. Apple
 models require macOS. One default language remains `pt-BR`.

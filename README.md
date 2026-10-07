@@ -186,6 +186,13 @@ the archive keeps growing whether or not an AI client is running. Routine syncs
 cost fractions of a cent; a quiet interval costs nothing, since nothing new gets
 embedded.
 
+When a transcription model is enabled, the macOS LaunchAgent captures new messages
+first, transcribes up to 100 pending audio files, then runs sync to embed the
+published transcripts and capture messages that arrived during transcription.
+With transcription disabled it runs sync once as before. Transcription failures
+are logged and do not prevent the final message sync. Capture failures stop the
+cycle, and interrupted jobs do not start another stage.
+
 Scheduled, manual, MCP, and dashboard syncs run in a supervised child process.
 The supervisor stops a ChatStorage sync after 10 minutes by default (SIGTERM, then SIGKILL
 after 5 more seconds). Set `"sync_timeout_minutes": 10` in `~/.whatmcp/config.json`

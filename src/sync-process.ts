@@ -34,11 +34,12 @@ function pauseScheduledSync(path: string): void {
   chmodSync(path, 0o600);
 }
 
-export function syncWorkerCommand(full = false): [string, string[]] {
+export function syncWorkerCommand(full = false, indexOnly = false): [string, string[]] {
   return [process.execPath, [
     '--experimental-sqlite', '--experimental-strip-types', '--no-warnings',
     join(import.meta.dirname, 'cli.ts'), 'sync-worker',
     ...(full ? ['--full'] : []),
+    ...(indexOnly ? ['--index-only'] : []),
   ]];
 }
 

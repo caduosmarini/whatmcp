@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Periodic archive sync.
+  Periodic archive capture, optional transcription, and embedding sync.
 
   A SEPARATE agent from the server, deliberately. Syncing inside the HTTP server
   would tie the archive's growth to the server being up, and the whole premise
@@ -29,12 +29,18 @@
     <string>--experimental-strip-types</string>
     <string>--no-warnings</string>
     <string>__REPO__/src/cli.ts</string>
-    <string>sync</string>
-    <string>--scheduled</string>
+    <string>scheduled-sync</string>
   </array>
 
   <key>WorkingDirectory</key>
   <string>__REPO__</string>
+
+  <!-- Include standard Homebrew locations for ffmpeg/ffprobe. Config paths override this. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
 
   <!-- Run once at load so a fresh install is current immediately. -->
   <key>RunAtLoad</key>
