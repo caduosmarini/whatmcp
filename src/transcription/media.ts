@@ -79,15 +79,13 @@ export function upsertAudioReferences(db: DB, refs: RawAudioReference[], sourceI
   return changed;
 }
 
-/** Backfill and incremental scanning use an independent watermark per source. */
+/** Media paths are mutable: revisit metadata even below the message watermark.
+ * This reads SQLite references only, never hashes or decodes media during sync.
+ */
 export function scanSourceMedia(
-  db: DB, snapshotPath: string, sourceId: string, sourceMaxPk: number, full = false,
+  db: DB, snapshotPath: string, sourceId: string, sourceMaxPk: number, _full = false,
 ): number {
-  const state = db.prepare('SELECT last_source_pk FROM audio_media_sources WHERE source_id = ?')
-    .get(sourceId) as { last_source_pk: number } | undefined;
-  const since = full || sourceMaxPk < (state?.last_source_pk ?? 0)
-    ? 0 : (state?.last_source_pk ?? 0);
-  const refs = extractAudioReferences(snapshotPath, since);
+  const refs = extractAudioReferences(snapshotPath);
   const changed = upsertAudioReferences(db, refs, sourceId);
   db.prepare(`
     INSERT INTO audio_media_sources(source_id, last_source_pk, last_run_at) VALUES (?, ?, ?)

@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { runIndex } from '../src/index/indexer.ts';
 import { openStore } from '../src/db/index.ts';
 import { runTranscription, importMediaManifest } from '../src/transcription/worker.ts';
-import { resolveMediaPath } from '../src/transcription/media.ts';
+import { resolveMediaPath, scanSourceMedia } from '../src/transcription/media.ts';
 import { embedMissing } from '../src/index/embed.ts';
 import { transcriptionLanguage, type Config } from '../src/config.ts';
 
@@ -213,4 +213,22 @@ test('returning to a cached language republishes its transcript', async () => {
     assert.equal((db.prepare('SELECT locale FROM active_transcripts').get() as any).locale, 'pt-BR');
     db.close();
   } finally { rmSync(f.dir, {recursive:true,force:true}); }
+});
+
+test('incremental media scan discovers paths added or changed below the watermark', () => {
+  const f = fixture();
+  try {
+    const source = new DatabaseSync(f.source);
+    source.exec('UPDATE ZWAMEDIAITEM SET ZMEDIALOCALPATH=NULL');
+    const db = openStore(f.store);
+    db.exec('DELETE FROM audio_media; DELETE FROM audio_media_sources');
+    assert.equal(scanSourceMedia(db, f.source, 'import', 3), 0);
+    source.exec("UPDATE ZWAMEDIAITEM SET ZMEDIALOCALPATH='voice.ogg'");
+    assert.equal(scanSourceMedia(db, f.source, 'import', 3), 1);
+    assert.equal(scanSourceMedia(db, f.source, 'import', 3), 0);
+    source.exec("UPDATE ZWAMEDIAITEM SET ZMEDIALOCALPATH='new.ogg'");
+    assert.equal(scanSourceMedia(db, f.source, 'import', 3), 1);
+    assert.equal((db.prepare('SELECT relative_path FROM audio_media').get() as any).relative_path, 'new.ogg');
+    source.close(); db.close();
+  } finally { rmSync(f.dir,{recursive:true,force:true}); }
 });
