@@ -145,6 +145,7 @@ switch (cmd) {
     }
     const cfg = loadConfig();
     const r = importWindowsUnified(cfg.store, resolve(path), {
+      mediaRoot: cfg.mediaRoots?.windows,
       full: flag('full'), progress: flag('json') ? undefined : m => console.log('  ' + m),
     });
     if (flag('json')) console.log(JSON.stringify(r));

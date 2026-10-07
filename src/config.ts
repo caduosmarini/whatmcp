@@ -187,6 +187,7 @@ export function loadConfig(): Config {
       (process.platform === 'darwin' && (f.chatstorage ?? DEFAULT_CHATSTORAGE) === DEFAULT_CHATSTORAGE
         ? 'macos' : 'import'),
     mediaRoots: {
+      windows: join(DATA_DIR, 'media', 'windows'),
       ...(process.platform === 'darwin'
         ? { macos: join(homedir(), 'Library/Group Containers/group.net.whatsapp.WhatsApp.shared/Message') }
         : {}),

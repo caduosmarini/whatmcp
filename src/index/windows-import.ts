@@ -1,14 +1,18 @@
 /** Import WAren6's SQLite output without replacing the iPhone history. */
 import { DatabaseSync } from 'node:sqlite';
+import { join } from 'node:path';
+import { DATA_DIR } from '../config.ts';
+import { collectWindowsAudio } from './windows-media.ts';
 import { existsSync } from 'node:fs';
 import { openStore } from '../db/index.ts';
 import { rebuildWindows } from './indexer.ts';
-import { markProjectionDirty } from '../transcription/media.ts';
+import { markProjectionDirty, upsertAudioReferences } from '../transcription/media.ts';
 import { phoneOf } from '../whatsapp/source.ts';
 
 export interface WindowsImportResult {
   scanned: number; added: number; recovered: number; skipped: number;
   windowsBuilt: number; windowsDropped: number; total: number;
+  audioReferenced: number; audioRejected: number;
 }
 
 interface Row {
@@ -21,7 +25,7 @@ const kind = (type: string | null) =>
   type === 'chat' ? 'text' : type === 'ptt' ? 'audio' : type === 'gp2' ? 'system' : (type || 'unknown');
 
 export function importWindowsUnified(
-  archivePath: string, sourcePath: string, opts: { full?: boolean; progress?: (s: string) => void } = {},
+  archivePath: string, sourcePath: string, opts: { full?: boolean; progress?: (s: string) => void; mediaRoot?: string } = {},
 ): WindowsImportResult {
   if (!existsSync(sourcePath)) throw new Error(`WAren6 database not found: ${sourcePath}`);
   const src = new DatabaseSync(sourcePath, { readOnly: true });
@@ -32,6 +36,7 @@ export function importWindowsUnified(
     }
     const check = src.prepare('PRAGMA quick_check').get() as { quick_check: string };
     if (check.quick_check !== 'ok') throw new Error('WAren6 database failed quick_check');
+    const audio = collectWindowsAudio(src, sourcePath, opts.mediaRoot ?? join(DATA_DIR, 'media', 'windows'), opts.progress);
     const db = openStore(archivePath);
     try {
       const state = db.prepare("SELECT last_ts FROM sync_state WHERE id='windows-waren6'").get() as { last_ts: number } | undefined;
@@ -66,6 +71,7 @@ export function importWindowsUnified(
         WHERE messages.text IS NULL AND excluded.text IS NOT NULL
       `);
       const touched = new Set<string>();
+      let audioReferenced = 0;
       let added=0, recovered=0, skipped=0, latest=state?.last_ts ?? 0;
       const now=Math.floor(Date.now()/1000);
       db.exec('BEGIN');
@@ -89,6 +95,16 @@ export function importWindowsUnified(
           }
           latest=Math.max(latest,ts);
         }
+        const archived = db.prepare('SELECT 1 FROM messages WHERE id=?');
+        const currentMedia = db.prepare('SELECT source_id,relative_path FROM audio_media WHERE message_id=?');
+        const refs = audio.refs.filter(r => archived.get(r.message_id));
+        audioReferenced = new Set(refs.map(r=>r.message_id)).size;
+        const changedRefs = refs.filter(r => {
+          const old = currentMedia.get(r.message_id) as {source_id:string;relative_path:string}|undefined;
+          return old?.source_id !== 'windows' || old.relative_path !== r.relative_path;
+        });
+        upsertAudioReferences(db, changedRefs, 'windows');
+        for (const ref of changedRefs) touched.add(ref.thread_id);
         db.prepare(`
           INSERT INTO sync_state(id,last_source_pk,last_ts,last_run_at,msg_count,full_runs)
           VALUES('windows-waren6',0,?, ?, (SELECT COUNT(*) FROM messages),?)
@@ -101,7 +117,7 @@ export function importWindowsUnified(
       const w=rebuildWindows(db,[...touched]);
       db.exec('UPDATE threads SET msg_count=(SELECT COUNT(*) FROM messages WHERE messages.thread_id=threads.id)');
       const total=Number((db.prepare('SELECT COUNT(*) n FROM messages').get() as {n:number}).n);
-      return {scanned:rows.length,added,recovered,skipped,windowsBuilt:w.built,windowsDropped:w.dropped,total};
+      return {scanned:rows.length,added,recovered,skipped,windowsBuilt:w.built,windowsDropped:w.dropped,total,audioReferenced,audioRejected:audio.rejected};
     } finally { db.close(); }
   } finally { src.close(); }
 }
