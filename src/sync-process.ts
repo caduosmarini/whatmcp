@@ -6,8 +6,10 @@ import { DATA_DIR } from './config.ts';
 
 export const SYNC_TIMEOUT_MS = 5 * 60 * 1000;
 export const WINDOWS_SYNC_TIMEOUT_MS = 30 * 60 * 1000;
-export function syncTimeoutMs(sourceType: string): number {
-  return sourceType === 'windows-waren6' ? WINDOWS_SYNC_TIMEOUT_MS : SYNC_TIMEOUT_MS;
+export function syncTimeoutMs(sourceType: string, automaticAudio = false): number {
+  const acquisition = sourceType === 'windows-waren6' ? WINDOWS_SYNC_TIMEOUT_MS : SYNC_TIMEOUT_MS;
+  // Leave a resumable audio budget below the Hot Copy task's 90-minute limit.
+  return acquisition + (automaticAudio ? 45 * 60 * 1000 : 0);
 }
 const STOP_GRACE_MS = 5 * 1000;
 export const SYNC_PAUSE_PATH = join(DATA_DIR, 'sync-paused.json');

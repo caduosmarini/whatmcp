@@ -13,6 +13,7 @@ The audio settings in `~/.whatmcp/config.json` are:
 ```json
 {
   "transcription_model": "apple-speech",
+  "transcription_auto_after_import": false,
   "transcription_default_language": "pt-BR",
   "transcription_concurrency": 2
 }
@@ -126,10 +127,35 @@ Permanent errors otherwise stay recorded. The setup estimate counts pending,
 uncached audio only, distinguishes unavailable and reusable files, and makes no
 model request merely to estimate the work.
 
-`npm run sync` continues to import messages and media references. It does not
-perform transcription inside sync. This avoids blocking routine sync on a model
-download, a privacy dialog, or the transcription API. To process new audio,
-run `transcribe` again. Windows scheduled sync uses WAren6 and preserves the
+Set `transcription_auto_after_import` to `true` to transcribe pending accessible
+audio automatically after every scheduled or manual `sync`, `index`,
+`import-windows`, and `media import`. Processing runs after import and before
+embeddings, under the shared import/sync lock. It uses the configured model and
+language, resumes interrupted segments, and reuses completed content hashes;
+it does not request historical replacement or reset permanent errors.
+The option defaults to `false`; a configured transcription model alone does not
+enable automatic uploads. With it disabled, sync still embeds pending text,
+while manual index/import commands retain their import-only behavior.
+
+Automatic transcription requires `transcription_model` too. On Windows:
+
+```json
+{
+  "transcription_model": "gpt-transcribe",
+  "transcription_auto_after_import": true,
+  "transcription_default_language": "pt-BR"
+}
+```
+
+Usable partial transcripts and new text are embedded even if some audio fails;
+the command then reports the failure. Unavailable audio does not block imports.
+The next run resumes pending work, respecting provider cooldowns. The automatic
+sync watchdog allows an additional 45 minutes (75 total on Windows, 50 for
+ChatStorage); a timeout preserves completed work and pauses scheduled sync until
+a successful manual retry. Direct manual imports are outside that sync watchdog.
+Standalone `transcribe` remains available and retains its explicit batch limit.
+
+Windows scheduled sync uses WAren6 and preserves the
 available audio; choose `gpt-transcribe` explicitly and provide `ffmpeg`/`ffprobe`
 on the account's PATH (or configure their paths) before processing it. Apple
 models require macOS. One default language remains `pt-BR`.

@@ -5,6 +5,7 @@ import { runIndex, rebuildWindows } from './index/indexer.ts';
 import { runWindowsIndex } from './index/windows-source.ts';
 import { importWindowsUnified } from './index/windows-import.ts';
 import { embedMissing, vectorCoverage, type ProgressEvent } from './index/embed.ts';
+import { processImportedArchive } from './index/post-import.ts';
 import { modelTag } from './index/openai.ts';
 import {
   searchHybrid, listThreads, listPeople, getConversation, stats,
@@ -123,6 +124,19 @@ function ctx(): SearchContext {
   };
 }
 
+const needsImportLock = ['index', 'import-windows', 'media', 'transcribe'].includes(cmd) && !flag('import-only');
+const releaseImportLock = needsImportLock ? tryAcquireSyncLock() : null;
+if (needsImportLock && !releaseImportLock) {
+  console.error('another import, sync or transcription is already running; this request was skipped');
+  process.exit(75);
+}
+async function afterManualImport(cfg: Config): Promise<void> {
+  if (!flag('import-only') && cfg.transcriptionAutoAfterImport) {
+    await processImportedArchive(cfg, { onProgress: m => console.log('  ' + m),
+      onEmbeddingProgress: onProgress, calibrate: calibrateIfUnset });
+  }
+}
+try {
 switch (cmd) {
   case 'windows-source': {
     const path = positional[0];
@@ -148,6 +162,7 @@ switch (cmd) {
       mediaRoot: cfg.mediaRoots?.windows,
       full: flag('full'), progress: flag('json') ? undefined : m => console.log('  ' + m),
     });
+    await afterManualImport(cfg);
     if (flag('json')) console.log(JSON.stringify(r));
     else console.log(`imported: ${r.added} new, ${r.recovered} texts recovered, ${r.skipped} without stable IDs; ${r.windowsBuilt} windows built`);
     break;
@@ -296,6 +311,7 @@ switch (cmd) {
     if (cfg.sourceType === 'windows-waren6') {
       const r = await runWindowsIndex(cfg, { full: flag('full'), progress: m => console.log('  ' + m) });
       console.log(`Windows: ${r.added} new, ${r.recovered} texts recovered, ${r.windowsBuilt} windows built, ${r.total} archived`);
+      await afterManualImport(cfg);
       break;
     }
     const r = runIndex(cfg.store, {
@@ -311,6 +327,7 @@ switch (cmd) {
         `  ${r.totalMessages} message(s) archived, watermark Z_PK=${r.watermark}\n` +
         `  ${((Date.now() - t0) / 1000).toFixed(1)}s -> ${cfg.store}`,
     );
+    await afterManualImport(cfg);
     break;
   }
 
@@ -346,6 +363,7 @@ switch (cmd) {
     }
     writeFileConfig({ media_source_id: sourceId,
       media_roots: { ...cfg.mediaRoots, [sourceId]: root } });
+    await afterManualImport(loadConfig());
     break;
   }
 
@@ -398,7 +416,9 @@ switch (cmd) {
 
   case 'sync': {
     const [command, args] = syncWorkerCommand(flag('full'));
-    process.exitCode = await runSyncProcess(command, args, { scheduled: flag('scheduled'), timeoutMs: syncTimeoutMs(loadConfig().sourceType) });
+    const cfg = loadConfig();
+    process.exitCode = await runSyncProcess(command, args, { scheduled: flag('scheduled'),
+      timeoutMs: syncTimeoutMs(cfg.sourceType, !!(cfg.transcriptionAutoAfterImport && cfg.transcriptionModel)) });
     break;
   }
 
@@ -411,7 +431,6 @@ switch (cmd) {
     }
     try {
       const cfg = loadConfig();
-      const ec = cfg.openaiKey ? embedConfig(cfg) : null;
       const t0 = Date.now();
       console.log(bold('indexing'));
       if (cfg.sourceType === 'windows-waren6') {
@@ -429,18 +448,8 @@ switch (cmd) {
             `${r.windowsBuilt} window(s) built  (${r.totalMessages} archived)`,
         );
       }
-      if (ec) {
-        console.log(bold('embedding'));
-        const result = await embedMissing(cfg.store, ec, { onProgress });
-        if (result.failed > 0) throw new Error(`${result.failed} embedding window(s) remain pending after API rejection; retry sync.`);
-        const db = openStore(cfg.store);
-        const cov = vectorCoverage(db, ec);
-        db.close();
-        console.log(`  coverage: ${cov.embedded}/${cov.windows} (${cov.pct}%)`);
-        await calibrateIfUnset(cfg, cov.embedded);
-      } else {
-        console.log('embedding skipped: no OpenAI key; FTS remains available');
-      }
+      await processImportedArchive(cfg, { onProgress: m => console.log('  ' + m),
+        onEmbeddingProgress: onProgress, calibrate: calibrateIfUnset });
       console.log(`done in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
     } finally {
       release();
@@ -667,7 +676,7 @@ switch (cmd) {
   url                       print the current public tunnel URL
   oauth [revoke <id>]       list or revoke OAuth clients
   sync [--full]             index new messages, then embed anything missing
-  index [--full]            index only
+  index [--full]            index; configured automatic audio also embeds
   embed [--limit=N]         embed only
   media import --root=DIR    link audio from a prepared source or manifest
   transcribe-models          check the three transcription models
@@ -686,3 +695,4 @@ switch (cmd) {
 
 data dir: ${DATA_DIR}`);
 }
+} finally { releaseImportLock?.(); }

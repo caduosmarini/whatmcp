@@ -40,6 +40,8 @@ test('sync watchdog preserves successful exit', async () => {
  test('Windows timeout and sync worker preserve platform policy', () => {
    assert.equal(syncTimeoutMs('windows-waren6'), 30 * 60000);
    assert.equal(syncTimeoutMs('chatstorage'), 5 * 60000);
+   assert.equal(syncTimeoutMs('windows-waren6', true), 75 * 60000);
+   assert.equal(syncTimeoutMs('chatstorage', true), 50 * 60000);
    assert.ok(!syncWorkerCommand(false)[1].includes('--index-only'));
  });
 

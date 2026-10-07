@@ -53,6 +53,8 @@ export interface FileConfig {
   min_sim?: number;
   strong_sim?: number;
   transcription_model?: TranscriptionModel | null;
+  /** Process pending audio automatically after imports; opt-in. */
+  transcription_auto_after_import?: boolean;
   transcription_concurrency?: number;
   transcription_default_language?: string;
   /** Legacy name accepted when the new setting is absent. */
@@ -128,6 +130,7 @@ export interface Config {
   /** Background sync cadence in hours; 0 means manual only. */
   syncIntervalHours: number;
   transcriptionModel?: TranscriptionModel | null;
+  transcriptionAutoAfterImport?: boolean;
   transcriptionConcurrency?: number;
   transcriptionDefaultLanguage?: string;
   mediaSourceId?: string;
@@ -154,6 +157,9 @@ export function transcriptionLanguage(f: Pick<FileConfig,
 
 export function loadConfig(): Config {
   const f = readFileConfig();
+  if (f.transcription_auto_after_import !== undefined && typeof f.transcription_auto_after_import !== 'boolean') {
+    throw new Error('transcription_auto_after_import must be a boolean');
+  }
   if (f.transcription_model != null && !TRANSCRIPTION_MODELS.includes(f.transcription_model)) {
     throw new Error(`Unknown transcription_model: ${f.transcription_model}`);
   }
@@ -181,6 +187,7 @@ export function loadConfig(): Config {
     strongSim: f.strong_sim,
     syncIntervalHours: Number(f.sync_interval_hours ?? 0),
     transcriptionModel: f.transcription_model ?? null,
+    transcriptionAutoAfterImport: f.transcription_auto_after_import === true,
     transcriptionConcurrency: concurrency,
     transcriptionDefaultLanguage: transcriptionLanguage(f),
     mediaSourceId: f.media_source_id ??

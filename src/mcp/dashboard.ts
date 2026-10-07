@@ -323,7 +323,7 @@ export function mountDashboard(app: express.Express, deps: DashboardDeps): void 
 
     try {
       const [command, args] = syncWorkerCommand(full);
-      const timeoutMs = syncTimeoutMs(cfg.sourceType);
+      const timeoutMs = syncTimeoutMs(cfg.sourceType, !!(cfg.transcriptionAutoAfterImport && cfg.transcriptionModel));
         const code = await runSyncProcess(command, args, {
           timeoutMs,
         onOutput: (chunk) => emit(chunk.trimEnd()),

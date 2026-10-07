@@ -102,6 +102,9 @@ The `WhatMCP Hot Copy` task uses an invisible launcher under the interactive
 user's profile. The user must be signed in. Configure `data/runtime-windows.json`
 with `python_path` when Python is unavailable on that user's PATH. The task
 collects, validates and imports, then generates all pending embeddings.
+If `transcription_auto_after_import` is `true`, it first transcribes all pending
+accessible audio with the configured model. The same option applies to manual
+sync, index, media import and WAren6 case imports; it defaults to `false`.
 
 Alternatively, `npm run wa -- sync-every <hours>` creates the per-user
 `WhatMCP Sync` task, which also embeds missing windows. `sync-every 0` removes
@@ -112,7 +115,9 @@ the command line.
 ## Upstream v0.2.0 integration
 
 Windows sync uses the upstream supervised worker and SQLite process lock, with a
-30-minute timeout (ChatStorage keeps the upstream 5-minute timeout). A timeout
+30-minute timeout (ChatStorage keeps the upstream 5-minute timeout). The watchdog
+adds 45 minutes when automatic audio transcription is enabled (75 minutes total
+on Windows, 50 for ChatStorage). A timeout
 pauses scheduled attempts until a successful manual retry. On Windows the worker
 and its helper processes are terminated together; WhatsApp remains open.
 
@@ -130,6 +135,8 @@ call timeout above the server's 30-minute watchdog, rather than abandoning the
 request while extraction is still running. In an existing Codex
 `[mcp_servers.whatmcp]` entry, set `tool_timeout_sec = 1900` and reload the MCP
 connection to apply it. Remote clients need their own timeout configuration.
+With automatic audio enabled, use `tool_timeout_sec = 4600` to exceed the
+75-minute Windows watchdog. Reload the client connection after changing it.
 The source service and scheduled task are independent of that client setting.
 Read tools query the existing archive without triggering collection; request
 `sync_archive` only for an explicit refresh or when newer data is necessary.
