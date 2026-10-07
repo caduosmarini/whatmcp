@@ -229,6 +229,7 @@ export function runIndex(storePath: string, opts: IndexOptions): IndexResult {
 export function rebuildWindows(
   db: DB,
   threadIds: string[],
+  opts: { invalidateCandidates?: boolean } = {},
 ): { built: number; dropped: number } {
   if (threadIds.length === 0) return { built: 0, dropped: 0 };
 
@@ -238,6 +239,9 @@ export function rebuildWindows(
   db.exec('BEGIN');
   try {
     for (const threadId of threadIds) {
+      if (opts.invalidateCandidates && db.prepare('SELECT 1 FROM thread_projection_state WHERE thread_id=?').get(threadId)) {
+        markProjectionDirty(db, threadId);
+      }
       const fresh = chunk(projectionInputs(db, threadId, 'active'));
       const result = replaceThreadWindows(db, threadId, fresh);
       built += result.built;

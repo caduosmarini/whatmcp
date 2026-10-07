@@ -138,8 +138,9 @@ Embedding batches count `cl100k_base` tokens locally, following the
 [OpenAI embedding guidance](https://developers.openai.com/api/docs/guides/embeddings).
 New windows split oversized Unicode text into attributable parts before hashing;
 valid payloads are sent in full. Legacy oversized windows are reported and left
-pending, keeping keyword search available; re-index their source with `--full`
-(or run `project` for audio conversations) before retrying embeddings.
+pending, keeping keyword search available. Run `npm run wa -- project --rewindow`
+to rebuild windows from the durable archive (including active transcripts), then
+retry embeddings. This does not require the original source or call a model.
 
 ## Native integration check
 

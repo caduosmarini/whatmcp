@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** WhatMCP CLI — build the archive, inspect it, tune it. */
 
-import { runIndex } from './index/indexer.ts';
+import { runIndex, rebuildWindows } from './index/indexer.ts';
 import { runWindowsIndex } from './index/windows-source.ts';
 import { importWindowsUnified } from './index/windows-import.ts';
 import { embedMissing, vectorCoverage, type ProgressEvent } from './index/embed.ts';
@@ -366,6 +366,11 @@ switch (cmd) {
     const cfg = loadConfig();
     const db = openStore(cfg.store);
     try {
+      if (flag('rewindow')) {
+        const threads = db.prepare('SELECT id FROM threads ORDER BY id').all() as {id:string}[];
+        const rebuilt = rebuildWindows(db, threads.map(t => t.id), {invalidateCandidates:true});
+        console.log(`${rebuilt.built} windows rebuilt from archived messages; ${rebuilt.dropped} replaced`);
+      }
       reconcileProjectionModel(db, cfg.transcriptionModel ?? null, cfg.transcriptionDefaultLanguage ?? 'pt-BR');
       const prepared = prepareReadyCandidates(db, cfg, 100);
       const published = publishCandidates(db, cfg, 100);
