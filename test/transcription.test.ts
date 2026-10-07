@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runIndex } from '../src/index/indexer.ts';
 import { openStore } from '../src/db/index.ts';
-import { runTranscription, importMediaManifest, inventoryAudio } from '../src/transcription/worker.ts';
+import { runTranscription, importMediaManifest, inventoryAudio, refreshAudioMedia } from '../src/transcription/worker.ts';
 import { resolveMediaPath, scanSourceMedia, hashFile } from '../src/transcription/media.ts';
 import {getConversation,searchHybrid} from '../src/search/search.ts';
 import {TRANSCRIPTION_REVISION} from '../src/transcription/identity.ts';
@@ -441,4 +441,20 @@ test('a new text sync keeps published transcripts while audio replacement is pen
     const db=openStore(f.store);const text=(db.prepare('SELECT text FROM windows').get() as any).text;
     assert.match(text,/preserved words/);assert.match(text,/texto novo/);db.close();
   }finally{rmSync(f.dir,{recursive:true,force:true});}
+});
+
+
+test('inventory does not overwrite a media reference replaced by concurrent sync', async () => {
+  const f = fixture();
+  const db = openStore(f.store);
+  try {
+    await refreshAudioMedia(db, f.cfg, {hash: async () => {
+      db.prepare("UPDATE audio_media SET relative_path='replacement.ogg',sha256=NULL WHERE message_id=?")
+        .run('123@s.whatsapp.net:voice');
+      return 'old-content-hash';
+    }});
+    const row = db.prepare('SELECT relative_path,sha256 FROM audio_media').get() as any;
+    assert.equal(row.relative_path, 'replacement.ogg');
+    assert.equal(row.sha256, null);
+  } finally {db.close();rmSync(f.dir,{recursive:true,force:true});}
 });

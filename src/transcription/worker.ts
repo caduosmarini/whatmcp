@@ -202,9 +202,9 @@ export async function refreshAudioMedia(db: DB, cfg: Config, options: {
       if (row.availability !== 'unavailable') {
         db.exec('BEGIN');
         try {
-          db.prepare("UPDATE audio_media SET availability='unavailable', checked_at=? WHERE message_id=?")
-            .run(now, row.message_id);
-          markProjectionDirty(db,row.thread_id); db.exec('COMMIT');
+          const updated = db.prepare("UPDATE audio_media SET availability='unavailable', checked_at=? WHERE message_id=? AND source_id=? AND relative_path IS ?")
+            .run(now, row.message_id, row.source_id, row.relative_path);
+          if (updated.changes) markProjectionDirty(db,row.thread_id); db.exec('COMMIT');
         } catch(e) {db.exec('ROLLBACK');throw e;}
       }
       continue;
@@ -220,11 +220,11 @@ export async function refreshAudioMedia(db: DB, cfg: Config, options: {
     if (verify || row.availability !== 'available') {
       db.exec('BEGIN');
       try {
-        db.prepare(`UPDATE audio_media SET sha256=?,size_bytes=?,mtime_ms=?,availability='available',
+        const updated = db.prepare(`UPDATE audio_media SET sha256=?,size_bytes=?,mtime_ms=?,availability='available',
           checked_at=?,hash_verified_at=?,duration_s=CASE WHEN sha256 IS ? THEN duration_s ELSE NULL END
-          WHERE message_id=?`).run(sha,stat.size,stat.mtimeMs,now,
-            verify ? now : row.hash_verified_at,sha,row.message_id);
-        if (row.sha256 !== sha || row.availability !== 'available') markProjectionDirty(db,row.thread_id);
+          WHERE message_id=? AND source_id=? AND relative_path IS ?`).run(sha,stat.size,stat.mtimeMs,now,
+            verify ? now : row.hash_verified_at,sha,row.message_id,row.source_id,row.relative_path);
+        if (updated.changes && (row.sha256 !== sha || row.availability !== 'available')) markProjectionDirty(db,row.thread_id);
         db.exec('COMMIT');
       } catch(e) {db.exec('ROLLBACK');throw e;}
     }
