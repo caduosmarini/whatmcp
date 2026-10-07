@@ -73,7 +73,7 @@ npm run wa -- doctor
 npm run embed                  # estimate first; sends new text windows to OpenAI
 ```
 
-`transcribe` runs independently of the five-minute message-sync watchdog. One
+`transcribe` runs independently of the configurable message-sync watchdog. One
 process holds a separate transcription lock. It saves a stable segment plan and
 each completed segment, so a later run resumes an interrupted file. Long files
 are split into at most ten-minute pieces, preferring nearby silence when possible.

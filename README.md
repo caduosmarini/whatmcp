@@ -187,8 +187,10 @@ cost fractions of a cent; a quiet interval costs nothing, since nothing new gets
 embedded.
 
 Scheduled, manual, MCP, and dashboard syncs run in a supervised child process.
-The supervisor stops a ChatStorage sync after 5 minutes (SIGTERM, then SIGKILL
-after 5 more seconds). Windows hot-copy sync has a 30-minute limit and stops
+The supervisor stops a ChatStorage sync after 10 minutes by default (SIGTERM, then SIGKILL
+after 5 more seconds). Set `"sync_timeout_minutes": 10` in `~/.whatmcp/config.json`
+to choose a positive timeout in minutes. The same setting applies to CLI, MCP,
+dashboard, and scheduled sync. Windows hot-copy sync defaults to 30 minutes and stops
 the worker process tree on timeout. See [Windows setup](docs/WINDOWS.md). Only one sync can run at a time; overlapping
 requests are skipped immediately. After a timeout, scheduled attempts are paused
 instead of repeatedly waiting on a macOS permission prompt. Run `npm run sync`

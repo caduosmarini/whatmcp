@@ -49,6 +49,8 @@ export interface FileConfig {
   windows_source_path?: string;
   /** Background sync cadence in hours; 0 or absent means manual only. */
   sync_interval_hours?: number;
+  /** Sync watchdog in minutes; defaults to 10 (ChatStorage) or 30 (WAren6). */
+  sync_timeout_minutes?: number;
   /** Written by `wa calibrate`; see search.ts for why these are not constants. */
   min_sim?: number;
   strong_sim?: number;
@@ -127,6 +129,7 @@ export interface Config {
   strongSim?: number;
   /** Background sync cadence in hours; 0 means manual only. */
   syncIntervalHours: number;
+  syncTimeoutMinutes?: number;
   transcriptionModel?: TranscriptionModel | null;
   transcriptionConcurrency?: number;
   transcriptionDefaultLanguage?: string;
@@ -152,6 +155,15 @@ export function transcriptionLanguage(f: Pick<FileConfig,
   catch { throw new Error('Invalid transcription_default_language; use a language tag such as pt-BR'); }
 }
 
+export function resolveSyncTimeoutMinutes(value: unknown, sourceType: string): number {
+  const minutes = value === undefined ? (sourceType === 'windows-waren6' ? 30 : 10) : value;
+  // Node clamps overflowing setTimeout budgets to 1ms instead of waiting longer.
+  if (typeof minutes !== 'number' || !Number.isFinite(minutes) || minutes <= 0 || minutes * 60_000 > 2_147_483_647) {
+    throw new Error('sync_timeout_minutes must be positive and fit the timer limit (at most 35791 minutes)');
+  }
+  return minutes;
+}
+
 export function loadConfig(): Config {
   const f = readFileConfig();
   if (f.transcription_model != null && !TRANSCRIPTION_MODELS.includes(f.transcription_model)) {
@@ -165,12 +177,13 @@ export function loadConfig(): Config {
   const dims = Number(
     process.env.WHATMCP_OPENAI_DIMS ?? f.openai_dims ?? NATIVE_DIMS[model] ?? 1536,
   );
+  const sourceType = process.env.WHATMCP_SOURCE_TYPE === 'windows-waren6' ? 'windows-waren6'
+    : process.env.WHATMCP_SOURCE_TYPE === 'chatstorage' ? 'chatstorage'
+    : f.source_type ?? 'chatstorage';
   return {
     store: process.env.WHATMCP_STORE ?? f.store ?? DEFAULT_STORE,
     chatstorage: process.env.WHATMCP_CHATSTORAGE ?? f.chatstorage ?? DEFAULT_CHATSTORAGE,
-    sourceType: process.env.WHATMCP_SOURCE_TYPE === 'windows-waren6' ? 'windows-waren6'
-      : process.env.WHATMCP_SOURCE_TYPE === 'chatstorage' ? 'chatstorage'
-      : f.source_type ?? 'chatstorage',
+    sourceType,
     windowsSourcePath: process.env.WHATMCP_WINDOWS_SOURCE_PATH ?? f.windows_source_path,
     windowsWaren6Path: process.env.WHATMCP_WAREN6_PATH ?? f.windows_waren6_path ?? null,
     windowsOutputDir: process.env.WHATMCP_WINDOWS_OUTPUT_DIR ?? f.windows_output_dir ?? join(DATA_DIR, 'windows-cases'),
@@ -180,6 +193,7 @@ export function loadConfig(): Config {
     minSim: f.min_sim,
     strongSim: f.strong_sim,
     syncIntervalHours: Number(f.sync_interval_hours ?? 0),
+    syncTimeoutMinutes: resolveSyncTimeoutMinutes(f.sync_timeout_minutes, sourceType),
     transcriptionModel: f.transcription_model ?? null,
     transcriptionConcurrency: concurrency,
     transcriptionDefaultLanguage: transcriptionLanguage(f),

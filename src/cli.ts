@@ -398,7 +398,8 @@ switch (cmd) {
 
   case 'sync': {
     const [command, args] = syncWorkerCommand(flag('full'));
-    process.exitCode = await runSyncProcess(command, args, { scheduled: flag('scheduled'), timeoutMs: syncTimeoutMs(loadConfig().sourceType) });
+    const cfg = loadConfig();
+    process.exitCode = await runSyncProcess(command, args, { scheduled: flag('scheduled'), timeoutMs: syncTimeoutMs(cfg.sourceType, cfg.syncTimeoutMinutes) });
     break;
   }
 
