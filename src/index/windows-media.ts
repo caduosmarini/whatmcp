@@ -8,7 +8,7 @@ import { resolveMediaPath } from '../transcription/media.ts';
 import type { RawAudioReference } from '../whatsapp/source.ts';
 
 interface Media {
-  msg_id: string; chat_jid: string; media_filename: string;
+  rowid: number; msg_id: string; chat_jid: string; media_filename: string;
   media_case_path: string; media_sha256: string; media_size: number | null;
 }
 
@@ -35,7 +35,7 @@ export function collectWindowsAudio(src: DatabaseSync, sourcePath: string, root:
   if (!['msg_type','media_filename','media_case_path','media_sha256'].every(c => columns.has(c))) {
     return { refs: [], rejected: 0 }; // older text-only WAren6 output
   }
-  const rows = src.prepare(`SELECT msg_id,chat_jid,media_filename,media_case_path,media_sha256,
+  const rows = src.prepare(`SELECT rowid,msg_id,chat_jid,media_filename,media_case_path,media_sha256,
     ${columns.has('media_size') ? 'media_size' : 'NULL media_size'} FROM messages
     WHERE msg_type IN ('ptt','audio') AND media_case_path IS NOT NULL`).all() as unknown as Media[];
   // WAren6 currently joins local assets by filename. Refuse any filename/path
@@ -80,7 +80,7 @@ export function collectWindowsAudio(src: DatabaseSync, sourcePath: string, root:
       const after = statSync(source);
       if (before.size !== after.size || before.mtimeMs !== after.mtimeMs) throw new Error('audio changed during import');
       refs.push({message_id:`${row.chat_jid.trim()}:${row.msg_id.trim()}`,
-        thread_id:row.chat_jid.trim(), relative_path});
+        thread_id:row.chat_jid.trim(), source_pk:row.rowid, relative_path});
     } catch (error) {
       rejected++;
       progress?.(`Audio reference skipped: ${(error as Error).message}`);
