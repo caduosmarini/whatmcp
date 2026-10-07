@@ -43,6 +43,10 @@ test('sync watchdog preserves successful exit', async () => {
    assert.equal(syncTimeoutMs('chatstorage'), 10 * 60000);
    assert.equal(syncTimeoutMs('chatstorage', 17), 17 * 60000);
    assert.equal(syncTimeoutMs('windows-waren6', 45), 45 * 60000);
+   assert.equal(syncTimeoutMs('windows-waren6', undefined, true), 75 * 60000);
+   assert.equal(syncTimeoutMs('chatstorage', undefined, true), 55 * 60000);
+   assert.equal(syncTimeoutMs('chatstorage', 17, true), 62 * 60000);
+   assert.throws(() => syncTimeoutMs('chatstorage', 35790, true), /sync_timeout_minutes/);
    assert.ok(!syncWorkerCommand(false)[1].includes('--index-only'));
  });
 

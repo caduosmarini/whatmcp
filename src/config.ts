@@ -55,6 +55,8 @@ export interface FileConfig {
   min_sim?: number;
   strong_sim?: number;
   transcription_model?: TranscriptionModel | null;
+  /** Process pending audio automatically after imports; opt-in. */
+  transcription_auto_after_import?: boolean;
   transcription_concurrency?: number;
   /** Maximum audio files per scheduled cycle; defaults to 100. */
   transcription_batch_size?: number;
@@ -133,6 +135,7 @@ export interface Config {
   syncIntervalHours: number;
   syncTimeoutMinutes?: number;
   transcriptionModel?: TranscriptionModel | null;
+  transcriptionAutoAfterImport?: boolean;
   transcriptionConcurrency?: number;
   transcriptionBatchSize?: number;
   transcriptionDefaultLanguage?: string;
@@ -177,6 +180,9 @@ export function resolveTranscriptionBatchSize(value: unknown): number {
 
 export function loadConfig(): Config {
   const f = readFileConfig();
+  if (f.transcription_auto_after_import !== undefined && typeof f.transcription_auto_after_import !== 'boolean') {
+    throw new Error('transcription_auto_after_import must be a boolean');
+  }
   if (f.transcription_model != null && !TRANSCRIPTION_MODELS.includes(f.transcription_model)) {
     throw new Error(`Unknown transcription_model: ${f.transcription_model}`);
   }
@@ -206,6 +212,7 @@ export function loadConfig(): Config {
     syncIntervalHours: Number(f.sync_interval_hours ?? 0),
     syncTimeoutMinutes: resolveSyncTimeoutMinutes(f.sync_timeout_minutes, sourceType),
     transcriptionModel: f.transcription_model ?? null,
+    transcriptionAutoAfterImport: f.transcription_auto_after_import === true,
     transcriptionConcurrency: concurrency,
     transcriptionBatchSize: resolveTranscriptionBatchSize(f.transcription_batch_size),
     transcriptionDefaultLanguage: transcriptionLanguage(f),

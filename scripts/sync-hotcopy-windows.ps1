@@ -163,6 +163,8 @@ try {
     $importLog = Join-Path $logs "import-$runId.log"
     if ($StorePath) { $env:WHATMCP_STORE = $StorePath }
     $importArguments = @('--experimental-sqlite', '--experimental-strip-types', '--no-warnings', $cli, 'import-windows', $dbPath, '--json')
+    # The outer sync/index worker owns the lock and processes audio/embeddings.
+    if ($ResultJson) { $importArguments += '--import-only' }
     if ($Full) { $importArguments += '--full' }
     & $node @importArguments *> $importLog
     $importExit = $LASTEXITCODE

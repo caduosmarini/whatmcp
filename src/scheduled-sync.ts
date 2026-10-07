@@ -72,6 +72,8 @@ export async function runScheduledSync(
   }
   console.log('scheduled: syncing messages and embedding published transcripts');
   const [command,args]=syncWorkerCommand();
+  // Keep the final stage embedding-only even when automatic imports are enabled.
+  args.push('--skip-auto-transcription');
   const syncCode=await sync(command,args,watchdog);
   return syncCode || transcriptionCode;
 }

@@ -13,6 +13,7 @@ The audio settings in `~/.whatmcp/config.json` are:
 ```json
 {
   "transcription_model": "apple-speech",
+  "transcription_auto_after_import": false,
   "transcription_default_language": "pt-BR",
   "transcription_concurrency": 2
 }
@@ -126,23 +127,46 @@ Permanent errors otherwise stay recorded. The setup estimate counts pending,
 uncached audio only, distinguishes unavailable and reusable files, and makes no
 model request merely to estimate the work.
 
-`npm run sync` continues to import messages and media references. It does not
-perform transcription inside sync. This avoids blocking routine sync on a model
-download, a privacy dialog, or the transcription API. To process new audio,
-run `transcribe` again. The macOS LaunchAgent instead uses `scheduled-sync`:
-it captures new messages/media references, runs `transcribe` when a
-model is enabled, then runs normal sync to embed published transcripts. Set
-`"transcription_batch_size": 100` in `~/.whatmcp/config.json` to choose the maximum
-audio files per scheduled cycle (default 100; a positive integer). The agent reads
-this setting each cycle and forwards it as `--limit`; no reinstall is required.
-Manual `transcribe --limit` retains its independent behavior. This
-bounded batch resumes the historical backlog over later runs; it never requests
-reprocessing of completed audio. Capture and final sync have their configured
-watchdog; transcription retains its independent per-segment timeouts. If
-transcription fails, the final sync still captures messages and embeds usable
-results. A paused sync schedule skips the entire cycle until a successful manual
-sync. Reinstall an existing macOS agent with `npm run wa -- sync-every <hours>`
-to pick up this workflow. Windows scheduled sync uses WAren6 and preserves the
+Set `transcription_auto_after_import` to `true` to transcribe pending accessible
+audio automatically after every scheduled or manual `sync`, `index`,
+`import-windows`, and `media import`. Processing runs after import and before
+embeddings, under the shared import/sync lock. It uses the configured model and
+language, resumes interrupted segments, and reuses completed content hashes;
+it does not request historical replacement or reset permanent errors.
+The option defaults to `false` for these import commands; a model alone does not
+enable their automatic transcription. The macOS LaunchAgent has its independent
+model-enabled scheduled workflow described below. With it disabled, sync still embeds pending text,
+while manual index/import commands retain their import-only behavior.
+
+Automatic transcription requires `transcription_model` too. On Windows:
+
+```json
+{
+  "transcription_model": "gpt-transcribe",
+  "transcription_auto_after_import": true,
+  "transcription_default_language": "pt-BR"
+}
+```
+
+Usable partial transcripts and new text are embedded even if some audio fails;
+the command then reports the failure. Unavailable audio does not block imports.
+The next run resumes pending work, respecting provider cooldowns. The automatic
+sync watchdog uses `sync_timeout_minutes` and allows an additional 45 minutes (75 total on Windows, 55 for
+ChatStorage); a timeout preserves completed work and pauses scheduled sync until
+a successful manual retry. Direct manual imports are outside that sync watchdog.
+Standalone `transcribe` remains available and retains its explicit batch limit.
+
+The macOS LaunchAgent retains the upstream `scheduled-sync` workflow: capture
+messages, transcribe up to `transcription_batch_size` pending files (default 100)
+when a model is configured, then capture arrivals and embed completed transcripts.
+Its capture stage defers all processing, and its final stage skips automatic
+transcription, so enabling automatic imports never bypasses the scheduled batch
+limit or starts a second audio pass. Capture and final sync use
+`sync_timeout_minutes`; the separate transcription stage retains its per-segment
+timeouts. Manual `transcribe --limit` remains independent. Reinstall existing
+macOS agents with `npm run wa -- sync-every <hours>` to use this workflow.
+
+Windows scheduled sync uses WAren6 and preserves the
 available audio; choose `gpt-transcribe` explicitly and provide `ffmpeg`/`ffprobe`
 on the account's PATH (or configure their paths) before processing it. Apple
 models require macOS. One default language remains `pt-BR`.

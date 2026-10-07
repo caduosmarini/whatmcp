@@ -6,8 +6,9 @@ import { DATA_DIR, resolveSyncTimeoutMinutes } from './config.ts';
 
 export const SYNC_TIMEOUT_MS = resolveSyncTimeoutMinutes(undefined, 'chatstorage') * 60_000;
 export const WINDOWS_SYNC_TIMEOUT_MS = resolveSyncTimeoutMinutes(undefined, 'windows-waren6') * 60_000;
-export function syncTimeoutMs(sourceType: string, minutes?: number): number {
-  return resolveSyncTimeoutMinutes(minutes, sourceType) * 60_000;
+export function syncTimeoutMs(sourceType: string, minutes?: number, automaticAudio = false): number {
+  const totalMinutes = resolveSyncTimeoutMinutes(minutes, sourceType) + (automaticAudio ? 45 : 0);
+  return resolveSyncTimeoutMinutes(totalMinutes, sourceType) * 60_000;
 }
 const STOP_GRACE_MS = 5 * 1000;
 export const SYNC_PAUSE_PATH = join(DATA_DIR, 'sync-paused.json');

@@ -7,7 +7,7 @@ import {tmpdir} from 'node:os';
 import {resolveTranscriptionBatchSize} from '../src/config.ts';
 import {runScheduledSync,runTranscriptionProcess} from '../src/scheduled-sync.ts';
 
-const cfg={sourceType:'chatstorage' as const,transcriptionModel:'apple-speech' as const,syncTimeoutMinutes:12};
+const cfg={sourceType:'chatstorage' as const,transcriptionModel:'apple-speech' as const,syncTimeoutMinutes:12,transcriptionAutoAfterImport:true};
 
 test('scheduled transcription forwards the configured batch size to the worker',async()=>{
   for(const size of [undefined,1,250]){
@@ -53,7 +53,7 @@ test('new audio is captured before transcription and embedded in the same cycle'
       assert.equal(options?.timeoutMs,720000);
       assert.equal(options?.scheduled,true);
       if(args.includes('--index-only')){captured=true;events.push('capture');}
-      else{assert.ok(published);events.push('sync');}
+      else{assert.ok(published);assert.ok(args.includes('--skip-auto-transcription'));events.push('sync');}
       return 0;
     },
     transcribe:async(_command,args)=>{
@@ -111,8 +111,11 @@ test('interrupting transcription does not start sync after cancellation',async()
   assert.equal(calls,1);
 });
 
-test('transcription subprocess preserves failures and forwards termination',async()=>{
+test('transcription subprocess preserves failures',async()=>{
   assert.equal(await runTranscriptionProcess(process.execPath,['-e','process.exit(13)']),13);
+});
+
+test('transcription subprocess forwards POSIX termination', {skip:process.platform==='win32'}, async()=>{
   const script=`import {runTranscriptionProcess} from './src/scheduled-sync.ts';
     const running=runTranscriptionProcess(process.execPath,['-e','setInterval(()=>{},1000)']);
     setTimeout(()=>process.kill(process.pid,'SIGTERM'),200);

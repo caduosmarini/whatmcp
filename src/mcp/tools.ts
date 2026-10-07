@@ -607,7 +607,9 @@ export function buildServer(deps: ToolDeps): McpServer {
           'behind, or when a search for something recent finds nothing.') +
           ' Do not call this before every query. Read tools use the existing archive without syncing. ' +
           'Call only when the user requests a refresh or the answer requires data newer than the last successful sync. ' +
-          'Windows synchronization can take several minutes (up to a 30-minute timeout).',
+          'Windows synchronization can take several minutes (up to a 30-minute timeout). ' +
+          'When transcription_auto_after_import is enabled, pending audio is transcribed before embeddings; ' +
+          'the sync timeout includes an additional 45 minutes for resumable audio processing.',
         inputSchema: {
           full: z.boolean().optional()
             .describe('Re-read the entire WhatsApp store rather than only new messages. ' +
@@ -619,7 +621,7 @@ export function buildServer(deps: ToolDeps): McpServer {
       async ({ full }) => {
         const [command, args] = syncWorkerCommand(full);
         let output = '';
-        const timeoutMs = syncTimeoutMs(cfg.sourceType, cfg.syncTimeoutMinutes);
+        const timeoutMs = syncTimeoutMs(cfg.sourceType, cfg.syncTimeoutMinutes, !!(cfg.transcriptionAutoAfterImport && cfg.transcriptionModel));
         const code = await runSyncProcess(command, args, {
           timeoutMs,
           onOutput: (chunk) => { output = (output + chunk).slice(-8000); },
