@@ -21,7 +21,7 @@ import { homedir } from 'node:os';
 
 import {
   loadConfig, readFileConfig, writeFileConfig, ensureDataDir, maskKey,
-  CONFIG_PATH, DATA_DIR,
+  CONFIG_PATH, DATA_DIR, transcriptionLanguage,
 } from './config.ts';
 import { runPreflight } from './preflight.ts';
 import { runIndex } from './index/indexer.ts';
@@ -142,6 +142,13 @@ export async function runSetup(): Promise<void> {
     } else {
       enable = await confirm('  Transcrever mensagens de áudio?', false);
       if (!enable) writeFileConfig({ transcription_model: null });
+    }
+    if (enable) {
+      const language = transcriptionLanguage({transcription_default_language:
+        await ask(`  Default transcription language [${cfg.transcriptionDefaultLanguage ?? 'pt-BR'}]: `,
+          cfg.transcriptionDefaultLanguage ?? 'pt-BR')});
+      writeFileConfig({transcription_default_language: language});
+      cfg = loadConfig();
     }
     if (enable && !savedModel) {
       const available = (await availableModels(cfg)).filter((m) =>

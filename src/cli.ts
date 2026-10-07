@@ -618,7 +618,10 @@ switch (cmd) {
   embed [--limit=N]         embed only
   media import --root=DIR    link audio from a prepared source or manifest
   transcribe-models          check the three transcription models
-  transcribe [--limit=N]     resume audio transcription (default 100; --retry-errors after a fix)
+  transcribe [--limit=N]     resume pending audio transcription (default 100)
+    --retry-errors          retry permanent errors after fixing their cause
+    --reprocess             queue historical audio for the current model/language
+    --verify-files          rehash all accessible files instead of the daily check
   project                   publish ready transcript windows
   calibrate                 fit similarity thresholds to this corpus
   doctor                    config, source readability, archive coverage
