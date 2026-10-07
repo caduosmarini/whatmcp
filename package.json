@@ -14,13 +14,14 @@
     "embed": "npm run wa -- embed",
     "doctor": "npm run wa -- doctor",
     "serve": "node --experimental-sqlite --experimental-strip-types --no-warnings src/mcp/server.ts",
-    "test": "node --experimental-sqlite --experimental-strip-types --no-warnings --test 'test/*.test.ts'",
+    "test": "node --experimental-sqlite --experimental-strip-types --no-warnings --test",
     "serve:http": "node --experimental-sqlite --experimental-strip-types --no-warnings src/mcp/http.ts",
     "setup": "node --experimental-sqlite --experimental-strip-types --no-warnings src/cli.ts setup"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
     "express": "^5.2.1",
+    "js-tiktoken": "1.0.21",
     "zod": "^3.25.0"
   },
   "license": "MIT"

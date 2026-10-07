@@ -38,10 +38,18 @@ resolves it below WhatsApp's `Message` group-container directory. Paths that are
 absolute, leave the configured root, or follow a symlink outside it are rejected.
 The SQLite reference does not guarantee that the audio file is still on disk.
 
-On Windows, supply a compatible `ChatStorage.sqlite` as described in
-[File import](IMPORT.md). The native WhatsApp Windows database and cache are not
-read automatically. If the SQLite file contains `ZMEDIAITEM` paths and matching
-files have been extracted, set the root explicitly:
+On Windows, the [WAren6 source](WINDOWS.md) collects locally available audio
+and imports verified message references into `WHATMCP_HOME/media/windows`.
+The importer checks the actual SHA-256 and size, rejects ambiguous filenames or
+paths claimed by different messages, and preserves bytes independently of the
+case directory. It revisits media metadata even for old archived messages below
+the text watermark. Missing or rejected files leave message history intact.
+Override the durable root with `media_roots.windows` if needed. Older WAren6
+schemas without media metadata remain usable for text imports.
+
+For a compatible `ChatStorage.sqlite` as described in [File import](IMPORT.md),
+if the SQLite file contains `ZMEDIAITEM` paths and matching files have been
+extracted, set the root explicitly:
 
 ```sh
 npm run wa -- media import --root=/path/to/extracted/Message --source=import
@@ -121,8 +129,18 @@ model request merely to estimate the work.
 `npm run sync` continues to import messages and media references. It does not
 perform transcription inside sync. This avoids blocking routine sync on a model
 download, a privacy dialog, or the transcription API. To process new audio,
-run `transcribe` again. Windows imports need a refreshed compatible source file
-and extracted media; a scheduled Windows importer is not included.
+run `transcribe` again. Windows scheduled sync uses WAren6 and preserves the
+available audio; choose `gpt-transcribe` explicitly and provide `ffmpeg`/`ffprobe`
+on the account's PATH (or configure their paths) before processing it. Apple
+models require macOS. One default language remains `pt-BR`.
+
+Embedding batches count `cl100k_base` tokens locally, following the
+[OpenAI embedding guidance](https://developers.openai.com/api/docs/guides/embeddings).
+New windows split oversized Unicode text into attributable parts before hashing;
+valid payloads are sent in full. Legacy oversized windows are reported and left
+pending, keeping keyword search available. Run `npm run wa -- project --rewindow`
+to rebuild windows from the durable archive (including active transcripts), then
+retry embeddings. This does not require the original source or call a model.
 
 ## Native integration check
 
@@ -134,7 +152,7 @@ checks that a second run does no duplicate work:
 
 ```sh
 WHATMCP_HOME="$(mktemp -d)" node --experimental-sqlite --experimental-strip-types \
-  --no-warnings test/native-audio.smoke.ts
+  --no-warnings scripts/native-audio.smoke.ts
 ```
 
 It does not use the live WhatsApp store, upload audio, or download models.

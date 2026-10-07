@@ -23,13 +23,15 @@ import {
   loadConfig, readFileConfig, writeFileConfig, ensureDataDir, maskKey,
   CONFIG_PATH, DATA_DIR, transcriptionLanguage,
 } from './config.ts';
-import { runPreflight } from './preflight.ts';
+import { runConfiguredPreflight } from './preflight.ts';
+import { runWindowsIndex } from './index/windows-source.ts';
 import { runIndex } from './index/indexer.ts';
 import { embedMissing, vectorCoverage, estimatePending } from './index/embed.ts';
 import { openStore } from './db/index.ts';
 import { embed as apiEmbed } from './index/openai.ts';
 import { calibrateThresholds } from './search/calibrate.ts';
 import { createSecretOutput } from './secret-input.ts';
+import { installWindowsSyncTask, disableWindowsSyncTask } from './windows-scheduler.ts';
 import { availableModels, installAppleModel } from './transcription/models.ts';
 import { inventoryAudio, runTranscription } from './transcription/worker.ts';
 
@@ -98,12 +100,22 @@ export async function runSetup(): Promise<void> {
     rule('1. Checking the source');
     let cfg = loadConfig();
     if (process.platform === 'win32') {
-      const source = await ask(`  Compatible ChatStorage.sqlite path [${cfg.chatstorage}]: `,
-        cfg.chatstorage);
-      writeFileConfig({ chatstorage: source, media_source_id: 'import' });
+      const defaultChoice = readFileConfig().chatstorage && cfg.sourceType === 'chatstorage' ? '2' : '1';
+      console.log('  1. WhatsApp Desktop Windows (WAren6 hot copy)');
+      console.log('  2. Compatible ChatStorage.sqlite import');
+      const choice = await ask(`  Source [${defaultChoice}]: `, defaultChoice);
+      if(choice === '1') {
+        const waren6 = await ask('  WAren6 directory: ', cfg.windowsWaren6Path ?? '');
+        const source = await ask('  WhatsApp package directory (blank uses your profile): ',cfg.windowsSourcePath ?? '');
+        writeFileConfig({source_type:'windows-waren6',windows_waren6_path:waren6,
+          ...(source ? {windows_source_path:source} : {})});
+      } else if(choice === '2') {
+        const source = await ask(`  Compatible ChatStorage.sqlite path [${cfg.chatstorage}]: `,cfg.chatstorage);
+        writeFileConfig({source_type:'chatstorage',chatstorage:source,media_source_id:'import'});
+      } else throw new Error('Invalid source selection');
       cfg = loadConfig();
     }
-    const checks = runPreflight(cfg.chatstorage);
+    const checks = runConfiguredPreflight(cfg);
     let blocked = false;
     for (const c of checks) {
       console.log(`  ${c.ok ? green('✓') : red('✗')} ${c.label}: ${c.detail}`);
@@ -130,7 +142,7 @@ export async function runSetup(): Promise<void> {
     } else {
       cfg = await promptKey(askSecret);
     }
-    if (!cfg.openaiKey) console.log(yellow('  Keyword search and local Apple transcription remain available.'));
+    if (!cfg.openaiKey) console.log(yellow('  Keyword search remains available.' + (process.platform === 'darwin' ? ' Local Apple transcription is also available.' : '')));
 
     rule('3. Audio transcription');
     const savedModel = readFileConfig().transcription_model;
@@ -150,7 +162,7 @@ export async function runSetup(): Promise<void> {
       writeFileConfig({transcription_default_language: language});
       cfg = loadConfig();
     }
-    if (enable && !savedModel) {
+    if (enable && (!savedModel || !(await availableModels(cfg)).find(m => m.model === savedModel)?.available)) {
       const available = (await availableModels(cfg)).filter((m) =>
         m.available || m.reason === 'locale asset not installed');
       if (!available.length) {
@@ -179,7 +191,7 @@ export async function runSetup(): Promise<void> {
       }
     }
     cfg = loadConfig();
-    if (enable && process.platform === 'win32') {
+    if (enable && process.platform === 'win32' && cfg.sourceType === 'chatstorage') {
       const root = await ask('  Extracted audio directory (leave blank to add later): ');
       if (root) {
         if (!existsSync(root) || !statSync(root).isDirectory()) {
@@ -192,18 +204,20 @@ export async function runSetup(): Promise<void> {
 
     // --- 4. build the archive ---------------------------------------------
     rule('4. Building the archive');
-    console.log('Reading WhatsApp\'s local database (a snapshot — the original is never written to).');
     const t0 = Date.now();
-    const r = runIndex(cfg.store, {
-      chatstorage: cfg.chatstorage,
-      mediaSourceId: cfg.mediaSourceId,
-      onProgress: (m) => console.log(dim(`  ${m}`)),
-    });
-    console.log(
-      `  ${green('✓')} ${r.totalMessages.toLocaleString()} messages, ` +
-      `${r.windowsBuilt.toLocaleString()} conversation windows ` +
-      `(${((Date.now() - t0) / 1000).toFixed(1)}s)`,
-    );
+    const progress = (m: string) => console.log(dim(`  ${m}`));
+    let messages: number, windows: number;
+    if(cfg.sourceType === 'windows-waren6') {
+      console.log('Copying and validating WhatsApp Desktop with WAren6 while WhatsApp remains open.');
+      const r = await runWindowsIndex(cfg,{progress});
+      messages=r.total;windows=r.windowsBuilt;
+    } else {
+      console.log('Reading the configured source database snapshot.');
+      const r = runIndex(cfg.store,{chatstorage:cfg.chatstorage,mediaSourceId:cfg.mediaSourceId,onProgress:progress});
+      messages=r.totalMessages;windows=r.windowsBuilt;
+    }
+    console.log(`  ${green('✓')} ${messages.toLocaleString()} messages, ` +
+      `${windows.toLocaleString()} conversation windows (${((Date.now()-t0)/1000).toFixed(1)}s)`);
 
     // --- 5. embeddings -----------------------------------------------------
     rule('5. Embeddings');
@@ -278,9 +292,9 @@ export async function runSetup(): Promise<void> {
 
     // --- 7. periodic sync --------------------------------------------------
     rule('7. Keeping it up to date');
-    if (process.platform !== 'darwin') {
+    if (process.platform !== 'darwin' && cfg.sourceType !== 'windows-waren6') {
       console.log('  On Windows, import a refreshed compatible SQLite file and run `npm run sync`.');
-      console.log('  The native WhatsApp Windows database is not read automatically.');
+      console.log('  Select the WAren6 source to collect from WhatsApp Desktop automatically.');
     } else {
     console.log(
       'WhatsApp prunes its own local database, so anything it drops before the\n' +
@@ -294,8 +308,8 @@ export async function runSetup(): Promise<void> {
       writeFileConfig({ sync_interval_hours: hours });
       installSyncAgent(hours);
       console.log(`  ${green('✓')} syncing every ${hours}h in the background`);
-      console.log(dim(`    logs: ~/.whatmcp/logs/sync.log`));
-      console.log(dim(`    stop: launchctl bootout gui/$(id -u)/com.whatmcp.sync`));
+      console.log(dim(`    logs: ${join(DATA_DIR,'logs','sync.log')}`));
+      console.log(dim('    stop: npm run wa -- sync-every 0'));
     } else {
       writeFileConfig({ sync_interval_hours: 0 });
       console.log(dim('  Manual only — run `npm run sync` when you want it.'));
@@ -420,6 +434,10 @@ async function calibrate(cfg: ReturnType<typeof loadConfig>): Promise<void> {
 
 /** Render and load the periodic-sync LaunchAgent. */
 export function installSyncAgent(hours: number): void {
+  if (process.platform === 'win32') {
+    installWindowsSyncTask(hours, REPO);
+    return;
+  }
   const agents = join(homedir(), 'Library/LaunchAgents');
   const logs = join(DATA_DIR, 'logs');
   if (!existsSync(agents)) mkdirSync(agents, { recursive: true });
@@ -442,6 +460,18 @@ export function installSyncAgent(hours: number): void {
   // job, so give the previous one a moment to actually go away.
   execFileSync('sleep', ['1']);
   execFileSync('launchctl', ['bootstrap', `gui/${uid}`, dest]);
+}
+
+/** Remove only the WhatMCP periodic task/agent, not its archive or logs. */
+export function disableSyncAgent(): void {
+  if (process.platform === 'win32') {
+    disableWindowsSyncTask();
+    return;
+  }
+  const uid = String(process.getuid?.() ?? 501);
+  try {
+    execFileSync('launchctl', ['bootout', `gui/${uid}/com.whatmcp.sync`], { stdio: 'ignore' });
+  } catch { /* not loaded */ }
 }
 
 /** Current idle-sleep setting in minutes, or null if it cannot be read. */

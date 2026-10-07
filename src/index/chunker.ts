@@ -16,6 +16,7 @@
  * this collapses ~41k text messages into ~5k coherent, self-contained units.
  */
 
+import { exceedsTokens, splitTokenText, tokenCount, MAX_INPUT_TOKENS } from './tokens.ts';
 import { createHash } from 'node:crypto';
 
 export interface ChunkInput {
@@ -91,13 +92,29 @@ export function chunk(messages: ChunkInput[], opts: ChunkOptions = {}): Window[]
     while (rest.length > allowance) {
       let cut = rest.lastIndexOf(' ', allowance);
       if (cut < allowance / 2) cut = allowance;
+      if (/^[\uDC00-\uDFFF]$/.test(rest[cut] ?? '')) cut--;
       out.push({ ...m, text: rest.slice(0, cut).trim(), part_no: part++ });
       rest = rest.slice(cut).trimStart();
     }
     if (rest) out.push({ ...m, text: rest, part_no: part });
     return out;
   });
-  const sorted = pieces.sort(
+  // Keep the speaker label in the budget as well. Each part stays attributable
+  // to its original message; long Unicode-heavy transcripts retain every part.
+  const tokenPieces = pieces.flatMap(m => {
+    const speaker = m.sender_name ?? 'unknown';
+    const budget = MAX_INPUT_TOKENS - (exceedsTokens(`${speaker}: `, 128) ? tokenCount(`${speaker}: `) : Buffer.byteLength(`${speaker}: `)) - 16;
+    const parts = splitTokenText(m.text, Math.max(16, budget));
+    return parts.map((text, i) => ({...m, text, tokenPart: i}));
+  });
+  tokenPieces.sort((a,b) => a.thread_id.localeCompare(b.thread_id) || a.ts-b.ts ||
+    a.message_id.localeCompare(b.message_id) || (a.part_no??0)-(b.part_no??0) || a.tokenPart-b.tokenPart);
+  const nextPart = new Map<string, number>();
+  for (const m of tokenPieces) {
+    const n = nextPart.get(m.message_id) ?? 0;
+    m.part_no = n; nextPart.set(m.message_id, n + 1);
+  }
+  const sorted = tokenPieces.sort(
     (a, b) => a.thread_id.localeCompare(b.thread_id) || a.ts - b.ts ||
       a.message_id.localeCompare(b.message_id) || (a.part_no ?? 0) - (b.part_no ?? 0),
   );
@@ -131,7 +148,8 @@ export function chunk(messages: ChunkInput[], opts: ChunkOptions = {}): Window[]
         m.thread_id !== prev.thread_id ||
         m.ts - prev.ts > gapSeconds ||
         buf.length >= maxMessages ||
-        runningChars + m.text.length + (m.sender_name?.length ?? 7) + 2 > maxChars;
+        runningChars + m.text.length + (m.sender_name?.length ?? 7) + 2 > maxChars ||
+        exceedsTokens(render([...buf, m]));
       if (broke) flush();
     }
     buf.push(m);

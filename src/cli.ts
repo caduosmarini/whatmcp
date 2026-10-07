@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 /** WhatMCP CLI — build the archive, inspect it, tune it. */
 
-import { runIndex } from './index/indexer.ts';
+import { runIndex, rebuildWindows } from './index/indexer.ts';
+import { runWindowsIndex } from './index/windows-source.ts';
+import { importWindowsUnified } from './index/windows-import.ts';
 import { embedMissing, vectorCoverage, type ProgressEvent } from './index/embed.ts';
 import { modelTag } from './index/openai.ts';
 import {
@@ -20,11 +22,11 @@ import { existsSync, statSync, rmSync, readFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { listClients, revokeClient } from './mcp/oauth.ts';
-import { runSetup, installSyncAgent } from './setup.ts';
-import { runPreflight } from './preflight.ts';
-import { dirname, join } from 'node:path';
+import { runSetup, installSyncAgent, disableSyncAgent } from './setup.ts';
+import { runConfiguredPreflight } from './preflight.ts';
+import { dirname, join, resolve } from 'node:path';
 import { readSecret } from './secret-input.ts';
-import { runSyncProcess, syncWorkerCommand } from './sync-process.ts';
+import { runSyncProcess, syncWorkerCommand, syncTimeoutMs } from './sync-process.ts';
 import { tryAcquireSyncLock } from './sync-lock.ts';
 import { availableModels } from './transcription/models.ts';
 import { importMediaManifest, runTranscription, scanConfiguredSource } from './transcription/worker.ts';
@@ -122,6 +124,35 @@ function ctx(): SearchContext {
 }
 
 switch (cmd) {
+  case 'windows-source': {
+    const path = positional[0];
+    if (!path || !existsSync(join(path, 'waren6.ps1'))) {
+      console.error('usage: npm run wa -- windows-source <WAren6 directory>');
+      process.exitCode = 1;
+      break;
+    }
+    writeFileConfig({ source_type: 'windows-waren6', windows_waren6_path: resolve(path) });
+    console.log('Windows WAren6 source configured. The iPhone archive is unchanged.');
+    break;
+  }
+
+  case 'import-windows': {
+    const path = positional[0];
+    if (!path) {
+      console.error('usage: npm run wa -- import-windows <unified_whatsapp.db> [--full]');
+      process.exitCode = 1;
+      break;
+    }
+    const cfg = loadConfig();
+    const r = importWindowsUnified(cfg.store, resolve(path), {
+      mediaRoot: cfg.mediaRoots?.windows,
+      full: flag('full'), progress: flag('json') ? undefined : m => console.log('  ' + m),
+    });
+    if (flag('json')) console.log(JSON.stringify(r));
+    else console.log(`imported: ${r.added} new, ${r.recovered} texts recovered, ${r.skipped} without stable IDs; ${r.windowsBuilt} windows built`);
+    break;
+  }
+
   case 'setup': {
     await runSetup();
     break;
@@ -130,20 +161,24 @@ switch (cmd) {
   /* Set the background sync cadence without the wizard. */
   case 'sync-every': {
     const hours = Math.max(0, Number(positional[0]));
-    if (!positional.length || Number.isNaN(hours)) {
+    if (!positional.length || !Number.isFinite(hours)) {
       console.error('usage: npm run wa -- sync-every <hours>   (0 disables)');
       process.exit(1);
     }
-    writeFileConfig({ sync_interval_hours: hours });
-    const uid = String(process.getuid?.() ?? 501);
     if (hours === 0) {
-      try {
-        execFileSync('launchctl', ['bootout', `gui/${uid}/com.whatmcp.sync`], { stdio: 'ignore' });
-      } catch { /* not loaded */ }
+      disableSyncAgent();
+      writeFileConfig({ sync_interval_hours: 0 });
       console.log('background sync disabled; run `npm run sync` manually');
     } else {
-      installSyncAgent(hours);
-      console.log(`syncing every ${hours}h — logs at ~/.whatmcp/logs/sync.log`);
+      try {
+        installSyncAgent(hours);
+      } catch (e) {
+        console.error(`cannot schedule sync: ${(e as Error).message}`);
+        process.exitCode = 1;
+        break;
+      }
+      writeFileConfig({ sync_interval_hours: hours });
+      console.log(`syncing every ${hours}h — logs at ${join(DATA_DIR, 'logs', 'sync.log')}`);
     }
     break;
   }
@@ -258,6 +293,11 @@ switch (cmd) {
   case 'index': {
     const cfg = loadConfig();
     const t0 = Date.now();
+    if (cfg.sourceType === 'windows-waren6') {
+      const r = await runWindowsIndex(cfg, { full: flag('full'), progress: m => console.log('  ' + m) });
+      console.log(`Windows: ${r.added} new, ${r.recovered} texts recovered, ${r.windowsBuilt} windows built, ${r.total} archived`);
+      break;
+    }
     const r = runIndex(cfg.store, {
       chatstorage: cfg.chatstorage,
       mediaSourceId: cfg.mediaSourceId,
@@ -326,6 +366,11 @@ switch (cmd) {
     const cfg = loadConfig();
     const db = openStore(cfg.store);
     try {
+      if (flag('rewindow')) {
+        const threads = db.prepare('SELECT id FROM threads ORDER BY id').all() as {id:string}[];
+        const rebuilt = rebuildWindows(db, threads.map(t => t.id), {invalidateCandidates:true});
+        console.log(`${rebuilt.built} windows rebuilt from archived messages; ${rebuilt.dropped} replaced`);
+      }
       reconcileProjectionModel(db, cfg.transcriptionModel ?? null, cfg.transcriptionDefaultLanguage ?? 'pt-BR');
       const prepared = prepareReadyCandidates(db, cfg, 100);
       const published = publishCandidates(db, cfg, 100);
@@ -353,7 +398,7 @@ switch (cmd) {
 
   case 'sync': {
     const [command, args] = syncWorkerCommand(flag('full'));
-    process.exitCode = await runSyncProcess(command, args, { scheduled: flag('scheduled') });
+    process.exitCode = await runSyncProcess(command, args, { scheduled: flag('scheduled'), timeoutMs: syncTimeoutMs(loadConfig().sourceType) });
     break;
   }
 
@@ -369,19 +414,25 @@ switch (cmd) {
       const ec = cfg.openaiKey ? embedConfig(cfg) : null;
       const t0 = Date.now();
       console.log(bold('indexing'));
-      const r = runIndex(cfg.store, {
-        chatstorage: cfg.chatstorage,
-        mediaSourceId: cfg.mediaSourceId,
-        full: flag('full'),
-        onProgress: (m) => console.log(`  ${m}`),
-      });
-      console.log(
-        `  ${r.newMessages} new, ${r.updatedMessages} updated, ` +
-          `${r.windowsBuilt} window(s) built  (${r.totalMessages} archived)`,
-      );
+      if (cfg.sourceType === 'windows-waren6') {
+        const r = await runWindowsIndex(cfg, { full: flag('full'), progress: m => console.log('  ' + m) });
+        console.log(`  ${r.added} new, ${r.recovered} texts recovered, ${r.windowsBuilt} windows built (${r.total} archived)`);
+      } else {
+        const r = runIndex(cfg.store, {
+          chatstorage: cfg.chatstorage,
+          mediaSourceId: cfg.mediaSourceId,
+          full: flag('full'),
+          onProgress: (m) => console.log(`  ${m}`),
+        });
+        console.log(
+          `  ${r.newMessages} new, ${r.updatedMessages} updated, ` +
+            `${r.windowsBuilt} window(s) built  (${r.totalMessages} archived)`,
+        );
+      }
       if (ec) {
         console.log(bold('embedding'));
-        await embedMissing(cfg.store, ec, { onProgress });
+        const result = await embedMissing(cfg.store, ec, { onProgress });
+        if (result.failed > 0) throw new Error(`${result.failed} embedding window(s) remain pending after API rejection; retry sync.`);
         const db = openStore(cfg.store);
         const cov = vectorCoverage(db, ec);
         db.close();
@@ -487,7 +538,7 @@ switch (cmd) {
 
     console.log(bold('\nenvironment'));
     let blocked = false;
-    for (const c of runPreflight(cfg.chatstorage)) {
+    for (const c of runConfiguredPreflight(cfg)) {
       console.log(`  ${c.ok ? '\x1b[32m✓\x1b[0m' : '\x1b[31m✗\x1b[0m'} ${c.label}: ${c.detail}`);
       if (!c.ok && c.fix) {
         console.log(c.fix.split('\n').map((l) => '      ' + l).join('\n'));
@@ -496,7 +547,7 @@ switch (cmd) {
     }
 
     const src = wa.sourceInfo(cfg.chatstorage);
-    if (src.exists && !blocked) {
+    if (cfg.sourceType !== 'windows-waren6' && src.exists && !blocked) {
       console.log(`  path:    ${cfg.chatstorage}`);
       console.log(`  size:    ${fmtBytes(src.size)}, modified ${fmtTs(src.mtime)}`);
       let snap: string | null = null;
@@ -609,6 +660,8 @@ switch (cmd) {
 
   setup                     guided first-run: key, index, embed, periodic sync
   sync-every <hours>        background sync cadence (0 disables)
+  windows-source <dir>      use WAren6 as the Windows source for future syncs
+  import-windows <db>       import a validated WAren6 unified_whatsapp.db
   set-key                   securely prompt for the OpenAI API key (0600)
   http-token                generate the HTTP bearer token (for npm run serve:http)
   url                       print the current public tunnel URL

@@ -28,11 +28,11 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { type Config, CONFIG_PATH } from '../config.ts';
 import {
   searchHybrid, getConversation, listMessageFeed, listThreads, listPeople,
-  getTimeline, getThreadSummary, stats, type SearchContext,
+  getTimeline, getThreadSummary, stats, type SearchContext, type Stats,
 } from '../search/search.ts';
 import { getStore, invalidate } from '../store.ts';
 import { modelTag } from '../index/openai.ts';
-import { isScheduledSyncPaused, runSyncProcess, syncWorkerCommand } from '../sync-process.ts';
+import { isScheduledSyncPaused, runSyncProcess, syncWorkerCommand, syncTimeoutMs } from '../sync-process.ts';
 import * as wa from '../whatsapp/source.ts';
 import { mediaStats } from '../transcription/media.ts';
 import { emit, summarizeArgs, summarizeResult } from './events.ts';
@@ -168,10 +168,16 @@ export function buildServer(deps: ToolDeps): McpServer {
    * second is usually what the user is asking about. Reads the live file's mtime
    * only — no snapshot, no copy, so it costs microseconds.
    */
-  function freshness(): string {
+  function freshness(snapshot?: Stats): string {
+    if (cfg.sourceType === 'windows-waren6') {
+      const s = snapshot ?? stats(ctx());
+      return `Windows data is a snapshot, not a live feed. Latest archived message: ${iso(s.latest)}. ` +
+        `Last successful sync: ${s.last_sync_at ? iso(s.last_sync_at) : 'never'}. ` +
+        'Use the archive for routine queries. Request sync_archive only when the user asks for a refresh or newer data is necessary; it can take several minutes and keeps WhatsApp open.';
+    }
     const src = wa.sourceInfo(cfg.chatstorage);
     if (!src.exists) return 'Configured source SQLite file not found.';
-    const s = stats(ctx());
+    const s = snapshot ?? stats(ctx());
     if (!s.last_sync_at) return 'The archive has never been synced.';
     const behindS = src.mtime - s.last_sync_at;
     if (behindS <= 0) return `Archive is current (last sync ${iso(s.last_sync_at)}).`;
@@ -571,7 +577,7 @@ export function buildServer(deps: ToolDeps): McpServer {
           (audio.lastError ? `  audio last error: ${audio.lastError}\n` : '') +
           `  range:     ${iso(s.earliest)} to ${iso(s.latest)}\n` +
           `  last sync: ${s.last_sync_at ? iso(s.last_sync_at) : 'never'}\n\n` +
-          freshness() +
+          freshness(s) +
           (isScheduledSyncPaused()
             ? '\n\nScheduled sync is paused after a timeout. Run sync_archive manually to retry; a successful sync resumes the schedule.'
             : '') +
@@ -589,11 +595,19 @@ export function buildServer(deps: ToolDeps): McpServer {
       {
         title: 'Sync archive',
         description:
-        'Bring the local archive up to date with the configured source SQLite: index new ' +
+          (cfg.sourceType === 'windows-waren6'
+            ? 'Acquire and import the encrypted Windows Desktop store with WAren6, then ' +
+              'generate embeddings for every pending conversation window. ' +
+              'This can take minutes. Uses the same validated hot-copy pipeline as the ' +
+              'scheduled sync, while WhatsApp remains open; no close confirmation is needed. '
+            : 'Bring the local archive up to date with WhatsApp Desktop: index new ' +
           'messages, then embed anything missing. Read-only with respect to WhatsApp ' +
           'itself — it copies and reads, and never writes or sends. Takes seconds for ' +
           'a routine catch-up. Use when get_archive_status reports the archive is ' +
-          'behind, or when a search for something recent finds nothing.',
+          'behind, or when a search for something recent finds nothing.') +
+          ' Do not call this before every query. Read tools use the existing archive without syncing. ' +
+          'Call only when the user requests a refresh or the answer requires data newer than the last successful sync. ' +
+          'Windows synchronization can take several minutes (up to a 30-minute timeout).',
         inputSchema: {
           full: z.boolean().optional()
             .describe('Re-read the entire WhatsApp store rather than only new messages. ' +
@@ -605,14 +619,16 @@ export function buildServer(deps: ToolDeps): McpServer {
       async ({ full }) => {
         const [command, args] = syncWorkerCommand(full);
         let output = '';
+        const timeoutMs = syncTimeoutMs(cfg.sourceType);
         const code = await runSyncProcess(command, args, {
+          timeoutMs,
           onOutput: (chunk) => { output = (output + chunk).slice(-8000); },
         });
         // The child may have written some messages even when embedding failed.
         invalidate();
         if (code !== 0) {
           throw new Error(code === 124
-            ? 'Sync exceeded 5 minutes and was stopped. Scheduled sync is paused until a manual sync succeeds.'
+            ? `Sync exceeded ${timeoutMs / 60000} minutes and was stopped. Scheduled sync is paused until a manual sync succeeds.`
             : code === 75
               ? 'Another sync is already running; this request was skipped.'
             : `Sync failed (exit ${code}): ${output.trim()}`);

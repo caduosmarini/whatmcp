@@ -18,10 +18,10 @@
  * setup and giving up.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, accessSync, constants, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { basename } from 'node:path';
-import { DEFAULT_CHATSTORAGE } from './config.ts';
+import { basename, join } from 'node:path';
+import { DEFAULT_CHATSTORAGE, type Config } from './config.ts';
 
 export interface Check {
   ok: boolean;
@@ -152,4 +152,31 @@ export function runPreflight(chatstorage: string): Check[] {
   return process.platform === 'darwin' && chatstorage === DEFAULT_CHATSTORAGE
     ? [checkNode(), checkWhatsAppInstalled(), checkStoreReadable(chatstorage)]
     : [checkNode(), checkStoreReadable(chatstorage)];
+}
+
+/** Source-specific checks: Windows acquisition does not use ChatStorage.sqlite. */
+export function runConfiguredPreflight(cfg: Config, platform: string = process.platform): Check[] {
+  if (cfg.sourceType !== 'windows-waren6') return runPreflight(cfg.chatstorage);
+  const checks = [checkNode()];
+  if (platform !== 'win32') return [...checks, {ok:false,label:'WAren6 source',
+    detail:'requires Windows',fix:'Use source_type=chatstorage on this platform, or sync on Windows.'}];
+  const readable = (path: string | undefined, label: string, directory: boolean, fix: string): Check => {
+    try {
+      if(!path)throw new Error('path not configured');
+      accessSync(path,constants.R_OK);
+      const stat=statSync(path);
+      if(directory ? !stat.isDirectory() : !stat.isFile())throw new Error('unexpected file type');
+      return {ok:true,label,detail:path};
+    }catch(e){return {ok:false,label,detail:(e as Error).message,fix};}
+  };
+  checks.push(readable(cfg.windowsWaren6Path ? join(cfg.windowsWaren6Path,'waren6.ps1') : undefined,
+    'WAren6 extractor',false,'Set windows_waren6_path to the separate WAren6 checkout containing waren6.ps1.'));
+  const source=cfg.windowsSourcePath ?? (process.env.LOCALAPPDATA ?
+    join(process.env.LOCALAPPDATA,'Packages','5319275A.WhatsAppDesktop_cv1g1gvanyjgm') : undefined);
+  for(const sub of ['LocalState',join('LocalCache','EBWebView','Default','IndexedDB'),
+    join('LocalCache','EBWebView','Default','Local Storage')]) {
+    checks.push(readable(source ? join(source,sub) : undefined,`WhatsApp ${sub}`,true,
+      'Sign in to WhatsApp Desktop. Set windows_source_path if a service account needs another user’s package directory.'));
+  }
+  return checks;
 }

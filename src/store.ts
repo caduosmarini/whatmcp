@@ -19,7 +19,8 @@ import { loadVectorIndex, type VectorIndex } from './search/vectors.ts';
 
 export interface Store {
   db: DB;
-  vectors: VectorIndex | null;
+  /** Loaded only when semantic search first requests them. */
+  readonly vectors: VectorIndex | null;
   /** Identity of the underlying file; changes when a sync writes to it. */
   key: string;
   model: string;
@@ -29,6 +30,8 @@ export interface Store {
 }
 
 let current: Store | null = null;
+interface VectorCache { loaded: boolean; value: VectorIndex | null }
+const vectorCaches = new WeakMap<Store, VectorCache>();
 
 function fileKey(path: string): string {
   const st = statSync(path);
@@ -63,14 +66,24 @@ export function getStore(path: string, modelTag: string): Store {
   const indexGeneration=Number((db.prepare('SELECT generation FROM search_index_state WHERE id=1').get() as
     {generation:number}).generation);
   const reuse=current?.identity===identity && current.model===modelTag && current.indexGeneration===indexGeneration;
+  // Sharing the cache object also preserves an *unloaded* matrix. SQL-only tools
+  // never force vector parsing when transcription progress reopens the handle.
+  const cache = reuse ? vectorCaches.get(current!)! : { loaded: false, value: null };
   const next: Store = {
     db,
-    vectors: reuse ? current!.vectors : loadVectorIndex(db, modelTag),
+    get vectors() {
+      if (!cache.loaded) {
+        cache.value = loadVectorIndex(db, modelTag);
+        cache.loaded = true;
+      }
+      return cache.value;
+    },
     identity,indexGeneration,
     key,
     model: modelTag,
     loadedAt: Date.now(),
   };
+  vectorCaches.set(next, cache);
   const old = current;
   current = next;
 
