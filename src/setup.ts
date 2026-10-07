@@ -162,7 +162,7 @@ export async function runSetup(): Promise<void> {
           if (!(await confirm('  Install the Apple language asset now?', false))) {
             throw new Error('Language asset is required before selecting this model');
           }
-          await installAppleModel(model, cfg.transcriptionLocale ?? 'pt-BR');
+          await installAppleModel(model, cfg.transcriptionDefaultLanguage ?? 'pt-BR');
         }
         if (model === 'gpt-transcribe') {
           console.log('  Audio will be uploaded to OpenAI. The resulting text will also be sent');

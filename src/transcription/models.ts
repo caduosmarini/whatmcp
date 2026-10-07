@@ -38,7 +38,7 @@ export async function installAppleModel(model: TranscriptionModel, locale: strin
 }
 
 export async function availableModels(cfg: Config): Promise<ModelAvailability[]> {
-  const locale = cfg.transcriptionLocale ?? 'pt-BR';
+  const locale = cfg.transcriptionDefaultLanguage ?? 'pt-BR';
   const out: ModelAvailability[] = [];
   for (const model of TRANSCRIPTION_MODELS) {
     if (model === 'gpt-transcribe') {

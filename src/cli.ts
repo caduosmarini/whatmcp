@@ -326,7 +326,7 @@ switch (cmd) {
     const cfg = loadConfig();
     const db = openStore(cfg.store);
     try {
-      reconcileProjectionModel(db, cfg.transcriptionModel ?? null);
+      reconcileProjectionModel(db, cfg.transcriptionModel ?? null, cfg.transcriptionDefaultLanguage ?? 'pt-BR');
       const prepared = prepareReadyCandidates(db, cfg, 100);
       const published = publishCandidates(db, cfg, 100);
       console.log(`${prepared} conversation(s) prepared, ${published} published`);
@@ -476,7 +476,7 @@ switch (cmd) {
     console.log(`  file:        ${CONFIG_PATH}${existsSync(CONFIG_PATH) ? '' : '  (absent)'}`);
     console.log(`  openai key:  ${maskKey(cfg.openaiKey)}`);
     console.log(`  model:       ${cfg.openaiModel} @ ${cfg.openaiDims} dims`);
-    console.log(`  transcription: ${cfg.transcriptionModel ?? 'off'} (${cfg.transcriptionLocale})`);
+    console.log(`  transcription: ${cfg.transcriptionModel ?? 'off'} (${cfg.transcriptionDefaultLanguage})`);
     for (const m of await availableModels(cfg)) {
       console.log(`    ${m.model}: ${m.available ? 'ready' : m.reason}`);
     }

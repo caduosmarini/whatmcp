@@ -9,7 +9,7 @@ import { openStore } from '../src/db/index.ts';
 import { runTranscription, importMediaManifest } from '../src/transcription/worker.ts';
 import { resolveMediaPath } from '../src/transcription/media.ts';
 import { embedMissing } from '../src/index/embed.ts';
-import type { Config } from '../src/config.ts';
+import { transcriptionLanguage, type Config } from '../src/config.ts';
 
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), 'whatmcp-audio-test-'));
@@ -42,7 +42,7 @@ function fixture() {
   const cfg: Config = {
     store, chatstorage: source, openaiKey: null, openaiModel: 'text-embedding-3-small',
     openaiDims: 1536, syncIntervalHours: 0, transcriptionModel: 'apple-speech',
-    transcriptionLocale: 'pt-BR', mediaSourceId: 'import', mediaRoots: { import: mediaRoot },
+    transcriptionDefaultLanguage: 'pt-BR', mediaSourceId: 'import', mediaRoots: { import: mediaRoot },
     ffmpegPath: 'ffmpeg', ffprobePath: 'ffprobe',
   };
   return { dir, source, store, mediaRoot, cfg };
@@ -192,4 +192,25 @@ test('explicit Windows-style manifest links only known messages and paths stay w
     symlinkSync(outside, join(f.mediaRoot, 'link.ogg'));
     assert.throws(() => resolveMediaPath(f.mediaRoot, 'link.ogg'));
   } finally { rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('one default language supports canonical tags and the legacy setting', () => {
+  assert.equal(transcriptionLanguage({}), 'pt-BR');
+  assert.equal(transcriptionLanguage({transcription_locale: 'en_US'}), 'en-US');
+  assert.equal(transcriptionLanguage({transcription_default_language: 'es-es', transcription_locale: 'pt-BR'}), 'es-ES');
+  assert.throws(() => transcriptionLanguage({transcription_default_language: 'pt,en'}));
+  assert.throws(() => transcriptionLanguage({transcription_default_language: ['pt', 'en'] as any}));
+});
+
+test('returning to a cached language republishes its transcript', async () => {
+  const f = fixture();
+  try {
+    await runTranscription(f.cfg, mockOptions(() => 'português'));
+    await runTranscription({...f.cfg, transcriptionDefaultLanguage: 'en-US'}, mockOptions(() => 'English'));
+    const result = await runTranscription(f.cfg, mockOptions(() => { throw new Error('cached'); }));
+    assert.equal(result.processed, 0);
+    const db = openStore(f.store);
+    assert.equal((db.prepare('SELECT locale FROM active_transcripts').get() as any).locale, 'pt-BR');
+    db.close();
+  } finally { rmSync(f.dir, {recursive:true,force:true}); }
 });

@@ -45,6 +45,8 @@ export interface FileConfig {
   min_sim?: number;
   strong_sim?: number;
   transcription_model?: TranscriptionModel | null;
+  transcription_default_language?: string;
+  /** Legacy name accepted when the new setting is absent. */
   transcription_locale?: string;
   media_source_id?: string;
   media_roots?: Record<string, string>;
@@ -113,7 +115,7 @@ export interface Config {
   /** Background sync cadence in hours; 0 means manual only. */
   syncIntervalHours: number;
   transcriptionModel?: TranscriptionModel | null;
-  transcriptionLocale?: string;
+  transcriptionDefaultLanguage?: string;
   mediaSourceId?: string;
   mediaRoots?: Record<string, string>;
   ffmpegPath?: string;
@@ -124,6 +126,17 @@ export const NATIVE_DIMS: Record<string, number> = {
   'text-embedding-3-small': 1536,
   'text-embedding-3-large': 3072,
 };
+
+/** One default language; normalize tags for stable transcript/cache identity. */
+export function transcriptionLanguage(f: Pick<FileConfig,
+  'transcription_default_language' | 'transcription_locale'>): string {
+  const language = f.transcription_default_language ?? f.transcription_locale ?? 'pt-BR';
+  if (typeof language !== 'string' || !language.trim()) {
+    throw new Error('transcription_default_language must be one language tag, e.g. pt-BR');
+  }
+  try { return Intl.getCanonicalLocales(language.trim().replaceAll('_', '-'))[0]; }
+  catch { throw new Error('Invalid transcription_default_language; use a language tag such as pt-BR'); }
+}
 
 export function loadConfig(): Config {
   const f = readFileConfig();
@@ -144,7 +157,7 @@ export function loadConfig(): Config {
     strongSim: f.strong_sim,
     syncIntervalHours: Number(f.sync_interval_hours ?? 0),
     transcriptionModel: f.transcription_model ?? null,
-    transcriptionLocale: f.transcription_locale ?? 'pt-BR',
+    transcriptionDefaultLanguage: transcriptionLanguage(f),
     mediaSourceId: f.media_source_id ??
       (process.platform === 'darwin' && (f.chatstorage ?? DEFAULT_CHATSTORAGE) === DEFAULT_CHATSTORAGE
         ? 'macos' : 'import'),

@@ -55,20 +55,20 @@ export function projectionInputs(db: DB, threadId: string,
 }
 
 /** Changing the chosen model dirties complete audio conversations, not vectors alone. */
-export function reconcileProjectionModel(db: DB, model: string | null): void {
+export function reconcileProjectionModel(db: DB, model: string | null, locale = 'pt-BR'): void {
   const now = Math.floor(Date.now() / 1000);
   db.exec('BEGIN');
   try {
     db.prepare(`
-      INSERT OR IGNORE INTO thread_projection_state(thread_id, desired_model, updated_at)
-      SELECT DISTINCT thread_id, ?, ? FROM messages WHERE kind = 'audio'
-    `).run(model, now);
+      INSERT OR IGNORE INTO thread_projection_state(thread_id, desired_model, desired_locale, updated_at)
+      SELECT DISTINCT thread_id, ?, ?, ? FROM messages WHERE kind = 'audio'
+    `).run(model, locale, now);
     db.prepare(`
       UPDATE thread_projection_state SET
-        desired_model = ?, desired_generation = desired_generation + 1,
+        desired_model = ?, desired_locale = ?, desired_generation = desired_generation + 1,
         status = 'dirty', updated_at = ?
-      WHERE desired_model IS NOT ?
-    `).run(model, now, model);
+      WHERE desired_model IS NOT ? OR desired_locale IS NOT ?
+    `).run(model, locale, now, model, locale);
     db.exec('COMMIT');
   } catch (e) {
     db.exec('ROLLBACK');
@@ -136,7 +136,7 @@ export function prepareReadyCandidates(db: DB, cfg: Config, limit = 25): number 
         SELECT message_id, audio_sha256, model, model_revision, locale, text, status
         FROM audio_transcripts WHERE message_id = ? AND audio_sha256 = ?
           AND model = ? AND model_revision = 'v1' AND locale = ?
-      `).get(row.message_id, row.sha256, model, cfg.transcriptionLocale ?? 'pt-BR') as
+      `).get(row.message_id, row.sha256, model, cfg.transcriptionDefaultLanguage ?? 'pt-BR') as
         (SelectedTranscript & { status: string }) | undefined;
       if (!result || !['done', 'no_speech'].includes(result.status)) {
         ready = false;

@@ -210,10 +210,10 @@ export async function runTranscription(cfg: Config, options: {
   const result: TranscriptionRun = {
     processed: 0, noSpeech: 0, unavailable: 0, failed: 0, prepared: 0, published: 0,
   };
-  const locale = cfg.transcriptionLocale ?? 'pt-BR';
+  const locale = cfg.transcriptionDefaultLanguage ?? 'pt-BR';
   const say = options.onProgress ?? (() => {});
   try {
-    reconcileProjectionModel(db, model);
+    reconcileProjectionModel(db, model, locale);
     if (options.retryErrors) db.prepare(`UPDATE audio_transcripts
       SET status = 'retryable_error', attempts = 0, error_code = NULL, lease_until = NULL
       WHERE model = ? AND locale = ? AND status = 'permanent_error'`)
