@@ -1,13 +1,14 @@
 /** Local cl100k_base tokenizer used by text-embedding-3-* (no network calls). */
-import { Tiktoken } from 'js-tiktoken/lite';
-import cl100k from 'js-tiktoken/ranks/cl100k_base';
+import { get_encoding, type Tiktoken } from 'tiktoken';
 let encoder: Tiktoken | undefined;
 const counts = new Map<string, number>();
 export const MAX_INPUT_TOKENS = 8_000; // margin below 8192
 export function tokenCount(text: string): number {
   const cached = counts.get(text);
   if (cached !== undefined) return cached;
-  encoder ??= new Tiktoken(cl100k);
+  // WASM keeps long Unicode runs from monopolizing publication in JavaScript.
+  // The encoding and special-token policy remain identical on macOS/Windows.
+  encoder ??= get_encoding('cl100k_base');
   // WhatsApp text may literally contain special-token markers; encode as text.
   const count = encoder.encode(text, [], []).length;
   if (text.length <= 16000) {
