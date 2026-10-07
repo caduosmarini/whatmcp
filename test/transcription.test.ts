@@ -407,3 +407,38 @@ test('completed audio has zero pending inference cost in setup inventory',async(
     assert.equal(cache.pending,1);assert.equal(cache.reused,1);assert.equal(cache.estimatedSeconds,0);
   }finally{rmSync(f.dir,{recursive:true,force:true});}
 });
+
+test('a cooldown survives restart and prevents immediate provider retries',async()=>{
+  const f=fixture();try{
+    const {TranscriptionError}=await import('../src/transcription/models.ts');
+    let calls=0;
+    const options={duration:async()=>1,convert:mockOptions(()=> '').convert,transcribe:async()=>{
+      calls++;throw new TranscriptionError('rate limit',true,true,120);}};
+    assert.equal((await runTranscription(f.cfg,options)).failed,1);
+    assert.equal((await runTranscription(f.cfg,options)).failed,0);assert.equal(calls,1);
+  }finally{rmSync(f.dir,{recursive:true,force:true});}
+});
+test('interrupted reprocessing remains queued after restart without the flag',async()=>{
+  const f=fixture();try{
+    addAudio(f,'second');
+    await runTranscription(f.cfg,{duration:async()=>1,convert:mockOptions(()=> '').convert,transcribe:async()=> 'old words'});
+    const cfg={...f.cfg,transcriptionModel:'apple-dictation' as const};
+    const first=await runTranscription(cfg,{duration:async()=>1,convert:mockOptions(()=> '').convert,transcribe:async()=> 'new words',limit:1,reprocess:true});
+    assert.equal(first.processed,1);
+    const second=await runTranscription(cfg,{duration:async()=>1,convert:mockOptions(()=> '').convert,transcribe:async()=> 'new words'});
+    assert.equal(second.processed,1);
+    const db=openStore(f.store);
+    assert.equal((db.prepare("SELECT COUNT(*) n FROM active_transcripts WHERE model='apple-dictation'").get() as any).n,2);db.close();
+  }finally{rmSync(f.dir,{recursive:true,force:true});}
+});
+test('a new text sync keeps published transcripts while audio replacement is pending',async()=>{
+  const f=fixture();try{
+    await runTranscription(f.cfg,mockOptions(()=> 'preserved words'));
+    const source=new DatabaseSync(f.source);
+    source.prepare('INSERT INTO ZWAMESSAGE VALUES (?,?,?,?,?,?,?,?,?,?)')
+      .run(4,'new-text',0,0,'texto novo',1700000004-978307200,1,null,null,null);source.close();
+    runIndex(f.store,{chatstorage:'',snapshotPath:f.source,mediaSourceId:'import'});
+    const db=openStore(f.store);const text=(db.prepare('SELECT text FROM windows').get() as any).text;
+    assert.match(text,/preserved words/);assert.match(text,/texto novo/);db.close();
+  }finally{rmSync(f.dir,{recursive:true,force:true});}
+});

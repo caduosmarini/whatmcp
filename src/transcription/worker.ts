@@ -78,7 +78,7 @@ async function command(binary: string, args: string[], timeoutMs: number): Promi
     return result.stdout.trim();
   } catch (e) {
     const error = e as NodeJS.ErrnoException;
-    if (error.code === 'ENOENT') throw new TranscriptionError(`${binary} not found in PATH`, false);
+    if (error.code === 'ENOENT') throw new TranscriptionError(`${binary} not found in PATH`, false, true);
     if (error.killed) throw new TranscriptionError(`${binary} timed out`, true);
     throw new TranscriptionError(`${binary} failed`, false);
   }
