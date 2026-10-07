@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { existsSync } from 'node:fs';
 import { openStore } from '../db/index.ts';
 import { rebuildWindows } from './indexer.ts';
+import { markProjectionDirty } from '../transcription/media.ts';
 import { phoneOf } from '../whatsapp/source.ts';
 
 export interface WindowsImportResult {
@@ -82,7 +83,10 @@ export function importWindowsUnified(
           const changed=Number(message.run(id,jid,senderId,ts,body,mine ? 1:0,kind(r.msg_type),stanza,r.rowid,now).changes)>0;
           if (!old && changed) added++;
           else if (old && old.text===null && body && changed) recovered++;
-          if (body && changed) touched.add(jid);
+          if (changed && (body || kind(r.msg_type) === 'audio')) {
+            markProjectionDirty(db, jid);
+            touched.add(jid);
+          }
           latest=Math.max(latest,ts);
         }
         db.prepare(`
