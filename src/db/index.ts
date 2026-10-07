@@ -20,6 +20,8 @@ export function openStore(path: string): DB {
   // Before migrate(): journal_mode is database-level and SQLite refuses to change
   // it from inside a transaction, which is where migrations run.
   db.exec('PRAGMA journal_mode = WAL');
+  // Sync and transcription have independent workers; wait for short write transactions.
+  db.exec('PRAGMA busy_timeout = 2000');
   db.exec('PRAGMA foreign_keys = ON');
   db.exec('PRAGMA synchronous = NORMAL');
   hardenStoreFiles(path);
@@ -46,7 +48,8 @@ export function openStoreRO(path: string): DB {
     );
   }
 
-  hardenStoreFiles(path);
+  // Readers may lack chmod permission even when the archive is readable.
+  // File permissions are hardened by openStore() on the write path.
   const db = new DatabaseSync(path, { readOnly: true });
   const have = currentVersion(db);
   const want = targetVersion();

@@ -30,9 +30,11 @@ import {
   searchHybrid, getConversation, listMessageFeed, listThreads, listPeople,
   getTimeline, getThreadSummary, stats, type SearchContext, type Stats,
 } from '../search/search.ts';
-import { invalidate } from '../store.ts';
+import { getStore, invalidate } from '../store.ts';
+import { modelTag } from '../index/openai.ts';
 import { isScheduledSyncPaused, runSyncProcess, syncWorkerCommand, syncTimeoutMs } from '../sync-process.ts';
 import * as wa from '../whatsapp/source.ts';
+import { mediaStats } from '../transcription/media.ts';
 import { emit, summarizeArgs, summarizeResult } from './events.ts';
 
 export interface ToolDeps {
@@ -47,6 +49,16 @@ export interface ToolDeps {
 const iso = (ts: number) => new Date(ts * 1000).toISOString();
 const day = (ts: number) => iso(ts).slice(0, 10);
 const text = (s: string) => ({ content: [{ type: 'text' as const, text: s }] });
+const messageBody = (m: { text: string | null; kind: string;
+  transcription_text?: string | null; transcription_model?: string | null;
+  transcription_status?: string | null; transcription_stale?: boolean; index_pending?: boolean }) =>
+  (m.text ?? `<${m.kind}>`) + (m.transcription_text
+    ? `\n  Áudio transcrito (${m.transcription_model}): ${m.transcription_text}` : '') +
+  (m.transcription_status === 'no_speech' ? '\n  [áudio sem fala detectável]' : '') +
+  (m.transcription_stale ? '\n  [transcrição de uma versão anterior do áudio]' : '') +
+  (m.index_pending ? '\n  [atualização de áudio pendente no índice]' : '') +
+  (m.transcription_status && !['done','no_speech'].includes(m.transcription_status)
+    ? `\n  [estado da transcrição: ${m.transcription_status}]` : '');
 
 /**
  * Parse an ISO-ish date, rejecting garbage loudly.
@@ -164,7 +176,7 @@ export function buildServer(deps: ToolDeps): McpServer {
         'Use the archive for routine queries. Request sync_archive only when the user asks for a refresh or newer data is necessary; it can take several minutes and keeps WhatsApp open.';
     }
     const src = wa.sourceInfo(cfg.chatstorage);
-    if (!src.exists) return 'WhatsApp Desktop store not found on this Mac.';
+    if (!src.exists) return 'Configured source SQLite file not found.';
     const s = snapshot ?? stats(ctx());
     if (!s.last_sync_at) return 'The archive has never been synced.';
     const behindS = src.mtime - s.last_sync_at;
@@ -175,14 +187,14 @@ export function buildServer(deps: ToolDeps): McpServer {
       : hours < 48 ? `${Math.round(hours)} hour(s)`
       : `${Math.round(hours / 24)} day(s)`;
     return (
-      `WhatsApp has been active ${ago} more recently than the last sync ` +
+      `Configured source file changed ${ago} more recently than the last sync ` +
       `(${iso(s.last_sync_at)}). Messages newer than that are not searchable yet — ` +
       `call sync_archive to catch up.`
     );
   }
 
   const server = new McpServer(
-    { name: 'whatmcp', version: '0.1.0' },
+    { name: 'whatmcp', version: '0.2.1' },
     {
       instructions:
         "Read-only access to the user's own WhatsApp history, archived locally. " +
@@ -337,7 +349,7 @@ export function buildServer(deps: ToolDeps): McpServer {
         );
       }
       const body = msgs
-        .map((m) => `[${iso(m.ts)}] ${m.sender_name}: ${m.text ?? `<${m.kind}>`}`)
+        .map((m) => `[${iso(m.ts)}] ${m.sender_name}: ${messageBody(m)}`)
         .join('\n');
       return text(`${msgs.length} message(s) from ${thread_id}:\n\n${fence(body)}`);
     },
@@ -394,7 +406,7 @@ export function buildServer(deps: ToolDeps): McpServer {
         : null;
       const body = out.messages.map((m) =>
         `[${iso(m.ts)}] ${m.thread_title ?? m.thread_id} | thread_id: ${m.thread_id} | ` +
-        `message_id: ${m.id} | ${m.sender_name}: ${m.text ?? `<${m.kind}>`}`,
+        `message_id: ${m.id} | ${m.sender_name}: ${messageBody(m)}`,
       ).join('\n');
       return text(
         `${out.messages.length} message(s) | range: ${iso(scope.after)} to ${iso(scope.before)} | ` +
@@ -550,6 +562,8 @@ export function buildServer(deps: ToolDeps): McpServer {
     async () => {
       if (!hasArchive()) return text(noArchive());
       const s = stats(ctx());
+      const audio = mediaStats(getStore(cfg.store,
+        modelTag({ model: cfg.openaiModel, dimensions: cfg.openaiDims })).db);
       const pct = s.windows ? Math.round((s.embedded / s.windows) * 100) : 0;
       return text(
         `WhatMCP archive\n` +
@@ -558,6 +572,9 @@ export function buildServer(deps: ToolDeps): McpServer {
           `  people:    ${s.senders}\n` +
           `  windows:   ${s.windows}\n` +
           `  embedded:  ${s.embedded}/${s.windows} (${pct}%) — ${s.model}\n` +
+          `  audio:     ${audio.available}/${audio.referenced} files available; ` +
+            `${audio.done} message(s) with transcripts, ${audio.pendingAudio} audio(s) pending; ${audio.pendingThreads} chat(s) pending projection\n` +
+          (audio.lastError ? `  audio last error: ${audio.lastError}\n` : '') +
           `  range:     ${iso(s.earliest)} to ${iso(s.latest)}\n` +
           `  last sync: ${s.last_sync_at ? iso(s.last_sync_at) : 'never'}\n\n` +
           freshness(s) +
@@ -600,8 +617,6 @@ export function buildServer(deps: ToolDeps): McpServer {
         annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
       },
       async ({ full }) => {
-        if (!embedCfg) return text(keyMissing());
-
         const [command, args] = syncWorkerCommand(full);
         let output = '';
         const timeoutMs = syncTimeoutMs(cfg.sourceType);

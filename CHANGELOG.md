@@ -2,6 +2,16 @@
 
 Notable changes to this fork of WhatMCP are recorded here.
 
+## [0.2.1] - 2026-10-06
+
+### Fixed
+
+- Read-only archive queries no longer attempt to change database or journal file permissions. This lets MCP reads work when the process can read the archive but cannot run `chmod`, including restricted execution environments. Archive creation and writable opens still enforce owner-only permissions.
+
+### Upgrade notes
+
+- Restart the MCP client connection to load the fix. No archive migration, reindexing, or synchronization is required.
+
 ## [0.2.0] - 2026-10-01
 
 ### Added

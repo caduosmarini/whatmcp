@@ -25,6 +25,8 @@ export interface Store {
   key: string;
   model: string;
   loadedAt: number;
+  identity: string;
+  indexGeneration: number;
 }
 
 let current: Store | null = null;
@@ -57,17 +59,15 @@ export function getStore(path: string, modelTag: string): Store {
   if (current && current.key === key && current.model === modelTag) return current;
 
   const db = openStoreRO(path);
-  let vectors: VectorIndex | null = null;
-  let vectorsLoaded = false;
+  const stat=statSync(path);
+  const identity=`${path}:${stat.dev}:${stat.ino}`;
+  const indexGeneration=Number((db.prepare('SELECT generation FROM search_index_state WHERE id=1').get() as
+    {generation:number}).generation);
+  const reuse=current?.identity===identity && current.model===modelTag && current.indexGeneration===indexGeneration;
   const next: Store = {
     db,
-    get vectors() {
-      if (!vectorsLoaded) {
-        vectors = loadVectorIndex(db, modelTag);
-        vectorsLoaded = true;
-      }
-      return vectors;
-    },
+    vectors: reuse ? current!.vectors : loadVectorIndex(db, modelTag),
+    identity,indexGeneration,
     key,
     model: modelTag,
     loadedAt: Date.now(),
@@ -94,11 +94,6 @@ export function tryGetStore(path: string, modelTag: string): Store | null {
 
 /** Drop the cached handle — used after an in-process sync rewrites the archive. */
 export function invalidate(): void {
-  const old = current;
-  current = null;
-  if (old) {
-    setTimeout(() => {
-      try { old.db.close(); } catch { /* already gone */ }
-    }, 30_000).unref();
-  }
+  // Force a fresh handle while retaining the matrix until generation is checked.
+  if(current)current.key='';
 }
