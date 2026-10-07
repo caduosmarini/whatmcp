@@ -76,3 +76,17 @@ test('untrusted hashes, ambiguous filenames, traversal and missing files are ski
     assert.equal(existsSync(f.mediaRoot),false);
   }finally{f.src.close();rmSync(f.dir,{recursive:true,force:true});}
 });
+
+test('audio outside the selected import and durable history is not copied or hashed',()=>{
+  const f=fixture();
+  try {
+    f.add('unarchived','voice.ogg');
+    const db=openStore(f.archive);
+    db.exec("INSERT INTO threads(id,kind,first_seen_at,last_seen_at) VALUES('existing','dm',0,0)");
+    db.exec("INSERT INTO messages(id,thread_id,ts,text,kind,is_from_me,first_seen_at) VALUES('existing:text','existing',1700000001,'later history','text',0,0)");
+    db.close();
+    const r=importWindowsUnified(f.archive,f.source,{mediaRoot:f.mediaRoot});
+    assert.equal(r.scanned,0);assert.equal(r.audioReferenced,0);assert.equal(r.audioRejected,0);
+    assert.equal(existsSync(f.mediaRoot),false);
+  }finally{f.src.close();rmSync(f.dir,{recursive:true,force:true});}
+});

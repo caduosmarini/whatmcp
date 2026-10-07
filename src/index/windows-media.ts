@@ -30,7 +30,7 @@ function digest(path: string, output?: number): string {
 }
 
 export function collectWindowsAudio(src: DatabaseSync, sourcePath: string, root: string,
-  progress?: (s: string) => void): { refs: RawAudioReference[]; rejected: number } {
+  progress?: (s: string) => void, allowedMessages?: Set<string>): { refs: RawAudioReference[]; rejected: number } {
   const columns = new Set((src.prepare('PRAGMA table_info(messages)').all() as {name:string}[]).map(r => r.name));
   if (!['msg_type','media_filename','media_case_path','media_sha256'].every(c => columns.has(c))) {
     return { refs: [], rejected: 0 }; // older text-only WAren6 output
@@ -51,6 +51,7 @@ export function collectWindowsAudio(src: DatabaseSync, sourcePath: string, root:
   const refs: RawAudioReference[] = [];
   let rejected = 0;
   for (const row of rows) {
+    if (allowedMessages && !allowedMessages.has(`${row.chat_jid?.trim()}:${row.msg_id?.trim()}`)) continue;
     let temporary: string | undefined;
     try {
       if (!row.msg_id?.trim() || !row.chat_jid?.trim() || !row.media_filename?.trim() ||

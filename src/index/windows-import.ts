@@ -36,7 +36,6 @@ export function importWindowsUnified(
     }
     const check = src.prepare('PRAGMA quick_check').get() as { quick_check: string };
     if (check.quick_check !== 'ok') throw new Error('WAren6 database failed quick_check');
-    const audio = collectWindowsAudio(src, sourcePath, opts.mediaRoot ?? join(DATA_DIR, 'media', 'windows'), opts.progress);
     const db = openStore(archivePath);
     try {
       const state = db.prepare("SELECT last_ts FROM sync_state WHERE id='windows-waren6'").get() as { last_ts: number } | undefined;
@@ -47,6 +46,11 @@ export function importWindowsUnified(
         'SELECT rowid,msg_id,chat_jid,chat_name,sender_jid,sender_name,from_me,timestamp,text,is_group,msg_type ' +
         'FROM messages WHERE timestamp>? AND timestamp<=? ORDER BY timestamp,rowid'
       ).all(since, Math.floor(Date.now()/1000)+86400) as Row[];
+      const allowedAudio = new Set((db.prepare("SELECT id FROM messages WHERE kind='audio'").all() as {id:string}[]).map(r=>r.id));
+      for(const r of rows) if(kind(r.msg_type)==='audio' && r.chat_jid?.trim() && r.msg_id?.trim()) {
+        allowedAudio.add(`${r.chat_jid.trim()}:${r.msg_id.trim()}`);
+      }
+      const audio = collectWindowsAudio(src, sourcePath, opts.mediaRoot ?? join(DATA_DIR, 'media', 'windows'), opts.progress, allowedAudio);
       const thread = db.prepare(`
         INSERT INTO threads (id,title,kind,msg_count,first_ts,last_ts,first_seen_at,last_seen_at)
         VALUES (?,?,?,0,?,?,?,?)
