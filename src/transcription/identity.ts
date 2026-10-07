@@ -1,2 +1,2 @@
 /** Bump when conversion or segmentation semantics change. */
-export const TRANSCRIPTION_REVISION = 'v1';
+export const TRANSCRIPTION_REVISION = 'v2';

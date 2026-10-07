@@ -85,6 +85,7 @@ export interface TranscriptionTransport {
   fetch?: typeof fetch;
   sleep?: (ms:number)=>Promise<void>;
   random?: ()=>number;
+  prompt?: string;
 }
 
 export async function transcribeSegment(model: TranscriptionModel, locale: string,
@@ -110,6 +111,7 @@ export async function transcribeSegment(model: TranscriptionModel, locale: strin
   const body = new FormData();
   body.append('model', 'gpt-transcribe');
   body.append('languages[]', locale.split('-')[0]);
+  if(transport.prompt)body.append('prompt',transport.prompt);
   body.append('file', new Blob([bytes], { type: AUDIO_TYPES[extname(audioPath).toLowerCase()] }), basename(audioPath));
   const send=transport.fetch ?? fetch;
   const sleep=transport.sleep ?? ((ms:number)=>new Promise<void>(r=>setTimeout(r,ms)));

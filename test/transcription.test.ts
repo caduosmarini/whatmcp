@@ -8,6 +8,8 @@ import { runIndex } from '../src/index/indexer.ts';
 import { openStore } from '../src/db/index.ts';
 import { runTranscription, importMediaManifest } from '../src/transcription/worker.ts';
 import { resolveMediaPath, scanSourceMedia, hashFile } from '../src/transcription/media.ts';
+import {TRANSCRIPTION_REVISION} from '../src/transcription/identity.ts';
+import {segmentBoundaries} from '../src/transcription/segments.ts';
 import { reconcileProjectionModel, prepareReadyCandidates, publishCandidates } from '../src/transcription/projection.ts';
 import { embedMissing } from '../src/index/embed.ts';
 import { transcriptionLanguage, type Config } from '../src/config.ts';
@@ -322,4 +324,21 @@ test('publication occurs during a long batch and new file bytes are retranscribe
     const result=await runTranscription(f.cfg,{duration:async()=>1,convert:mockOptions(()=> '').convert,transcribe:async()=> 'changed content'});
     assert.equal(result.processed,1);
   } finally {rmSync(f.dir,{recursive:true,force:true});}
+});
+
+test('segment planning uses silence near boundaries without gaps or overlaps',()=>{
+  assert.deepEqual(segmentBoundaries(1220,[590,1190]),[{start:0,end:590},{start:590,end:1190},{start:1190,end:1220}]);
+});
+test('GPT sends a supported short source directly and stores a reproducible segment plan',async()=>{
+  const f=fixture();try{
+    let conversions=0;
+    await runTranscription({...f.cfg,transcriptionModel:'gpt-transcribe'}, {
+      duration:async()=>20,convert:async()=>{conversions++;},
+      transcribe:async(_m,_l,path)=>{assert.equal(path.endsWith('.ogg'),true);return 'direct upload';}});
+    assert.equal(conversions,0);
+    const db=openStore(f.store);
+    const t=db.prepare('SELECT segment_plan,model_revision FROM audio_transcripts').get() as any;
+    assert.equal(t.model_revision,TRANSCRIPTION_REVISION);
+    assert.deepEqual(JSON.parse(t.segment_plan),[{start:0,end:20}]);db.close();
+  }finally{rmSync(f.dir,{recursive:true,force:true});}
 });

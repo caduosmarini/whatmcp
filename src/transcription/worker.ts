@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
-import { mkdtempSync, rmSync, statSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync, readFileSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, extname } from 'node:path';
 import { promisify } from 'node:util';
 import { openStore, type DB } from '../db/index.ts';
 import { type Config, type TranscriptionModel } from '../config.ts';
@@ -9,12 +9,13 @@ import * as wa from '../whatsapp/source.ts';
 import { tryAcquireSyncLock } from '../sync-lock.ts';
 import { hashFile, listAudioMedia, markProjectionDirty, mediaPath,
   scanSourceMedia, upsertAudioReferences, type AudioMediaRow } from './media.ts';
-import { availableModels, transcribeSegment, TranscriptionError } from './models.ts';
+import { availableModels, transcribeSegment, TranscriptionError, canUploadDirect } from './models.ts';
 import { prepareReadyCandidates, publishCandidates,
   reconcileProjectionModel } from './projection.ts';
 
 const exec = promisify(execFile);
 import { TRANSCRIPTION_REVISION as REVISION } from './identity.ts';
+import {planSegments, segmentBoundaries, type AudioSegment} from './segments.ts';
 const LEASE_SECONDS = 5 * 60;
 const SEGMENT_SECONDS = 10 * 60; // 16 kHz mono WAV stays below 25 MB.
 
@@ -127,11 +128,11 @@ export async function inventoryAudio(cfg: Config): Promise<{
 }
 
 async function convertSegment(cfg: Config, source: string, segment: number,
-  destination: string): Promise<void> {
+  destination: string, range?: AudioSegment): Promise<void> {
   await command(cfg.ffmpegPath ?? 'ffmpeg', [
     '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
-    '-ss', String(segment * SEGMENT_SECONDS), '-i', source,
-    '-t', String(SEGMENT_SECONDS), '-ac', '1', '-ar', '16000',
+    '-ss', String(range?.start ?? segment * SEGMENT_SECONDS), '-i', source,
+    '-t', String(range ? range.end-range.start : SEGMENT_SECONDS), '-ac', '1', '-ar', '16000',
     '-c:a', 'pcm_s16le', destination,
   ], 300_000);
   if (statSync(destination).size > 25_000_000) {
@@ -313,7 +314,21 @@ export async function runTranscription(cfg: Config, options: {
       const path=mediaPath(cfg,row);
       const tempDir = mkdtempSync(join(tmpdir(), 'whatmcp-audio-'));
       try {
-        const count = Math.max(1, Math.ceil(await (options.duration ?? durationSeconds)(cfg, path) / SEGMENT_SECONDS));
+        // Process an immutable private copy tied to the claimed content hash.
+        const source=join(tempDir,`source${extname(path)}`);
+        copyFileSync(path,source);
+        if(await hashFile(source)!==sha)throw new TranscriptionError('audio changed after inventory',true);
+        const saved=db.prepare(`SELECT segment_plan FROM audio_transcripts
+          WHERE message_id=? AND audio_sha256=? AND model=? AND model_revision=? AND locale=?`)
+          .get(row.message_id,sha,model,REVISION,locale) as {segment_plan:string|null};
+        const duration=row.duration_s ?? await (options.duration ?? durationSeconds)(cfg,source);
+        db.prepare('UPDATE audio_media SET duration_s=? WHERE message_id=? AND sha256=?').run(duration,row.message_id,sha);
+        const ranges:AudioSegment[]=saved.segment_plan ? JSON.parse(saved.segment_plan) :
+          options.convert ? segmentBoundaries(duration) : await planSegments(cfg,source,duration);
+        if(!saved.segment_plan)db.prepare(`UPDATE audio_transcripts SET segment_plan=?
+          WHERE message_id=? AND audio_sha256=? AND model=? AND model_revision=? AND locale=?`)
+          .run(JSON.stringify(ranges),row.message_id,sha,model,REVISION,locale);
+        const count=ranges.length;
         const texts: string[] = [];
         for (let n = 0; n < count; n++) {
           const prior = db.prepare(`
@@ -321,10 +336,13 @@ export async function runTranscription(cfg: Config, options: {
               AND model = ? AND model_revision = ? AND locale = ? AND segment_no = ?
           `).get(row.message_id, sha, model, REVISION, locale, n) as { text: string } | undefined;
           if (prior) { texts.push(prior.text); continue; }
-          const wav = join(tempDir, `part-${n}.wav`);
-          await (options.convert ?? convertSegment)(cfg, path, n, wav);
+          let input=source;
+          if(model!=='gpt-transcribe' || count!==1 || !canUploadDirect(source,statSync(source).size)) {
+            input=join(tempDir,`part-${n}.wav`);
+            await (options.convert ?? convertSegment)(cfg,source,n,input,ranges[n]);
+          }
           const text = await (options.transcribe ?? transcribeSegment)(
-            model, locale, wav, cfg.openaiKey);
+            model,locale,input,cfg.openaiKey,{prompt:texts.slice(-1).join(' ').slice(-1000)});
           db.prepare(`
             INSERT OR REPLACE INTO transcript_segments
               (message_id, audio_sha256, model, model_revision, locale, segment_no, text)
