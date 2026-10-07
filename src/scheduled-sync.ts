@@ -2,7 +2,7 @@
 import {spawn} from 'node:child_process';
 import {constants} from 'node:os';
 import {join} from 'node:path';
-import type {Config} from './config.ts';
+import {resolveTranscriptionBatchSize,type Config} from './config.ts';
 import {isScheduledSyncPaused,runSyncProcess,syncTimeoutMs,syncWorkerCommand} from './sync-process.ts';
 
 /** Transcription has its own per-segment timeout; the sync budget does not apply. */
@@ -35,7 +35,7 @@ export function runTranscriptionProcess(command: string, args: string[]): Promis
 }
 
 export async function runScheduledSync(
-  cfg: Pick<Config,'sourceType'|'syncTimeoutMinutes'|'transcriptionModel'>,
+  cfg: Pick<Config,'sourceType'|'syncTimeoutMinutes'|'transcriptionModel'|'transcriptionBatchSize'>,
   options: {
     sync?: typeof runSyncProcess;
     transcribe?: typeof runTranscriptionProcess;
@@ -51,16 +51,17 @@ export async function runScheduledSync(
   const watchdog={scheduled:true,timeoutMs:syncTimeoutMs(cfg.sourceType,cfg.syncTimeoutMinutes)};
   let transcriptionCode=0;
   if(cfg.transcriptionModel) {
+    const batchSize=resolveTranscriptionBatchSize(cfg.transcriptionBatchSize);
     console.log('scheduled: capturing new messages and audio references');
     const [command,args]=syncWorkerCommand(false,true);
     const captureCode=await sync(command,args,watchdog);
     // Do not transcribe stale data after a failed, overlapping, or interrupted capture.
     if(captureCode!==0)return captureCode;
-    console.log('scheduled: transcribing up to 100 pending audio files');
+    console.log(`scheduled: transcribing up to ${batchSize} pending audio files`);
     try {
       transcriptionCode=await transcribe(process.execPath,[
         '--experimental-sqlite','--experimental-strip-types','--no-warnings',
-        join(import.meta.dirname,'cli.ts'),'transcribe','--limit=100',
+        join(import.meta.dirname,'cli.ts'),'transcribe',`--limit=${batchSize}`,
       ]);
     }catch(error){
       console.error(`scheduled transcription could not start: ${(error as Error).message}`);

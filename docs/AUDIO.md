@@ -130,8 +130,12 @@ model request merely to estimate the work.
 perform transcription inside sync. This avoids blocking routine sync on a model
 download, a privacy dialog, or the transcription API. To process new audio,
 run `transcribe` again. The macOS LaunchAgent instead uses `scheduled-sync`:
-it captures new messages/media references, runs `transcribe --limit=100` when a
-model is enabled, then runs normal sync to embed published transcripts. This
+it captures new messages/media references, runs `transcribe` when a
+model is enabled, then runs normal sync to embed published transcripts. Set
+`"transcription_batch_size": 100` in `~/.whatmcp/config.json` to choose the maximum
+audio files per scheduled cycle (default 100; a positive integer). The agent reads
+this setting each cycle and forwards it as `--limit`; no reinstall is required.
+Manual `transcribe --limit` retains its independent behavior. This
 bounded batch resumes the historical backlog over later runs; it never requests
 reprocessing of completed audio. Capture and final sync have their configured
 watchdog; transcription retains its independent per-segment timeouts. If

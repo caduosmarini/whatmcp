@@ -56,6 +56,8 @@ export interface FileConfig {
   strong_sim?: number;
   transcription_model?: TranscriptionModel | null;
   transcription_concurrency?: number;
+  /** Maximum audio files per scheduled cycle; defaults to 100. */
+  transcription_batch_size?: number;
   transcription_default_language?: string;
   /** Legacy name accepted when the new setting is absent. */
   transcription_locale?: string;
@@ -132,6 +134,7 @@ export interface Config {
   syncTimeoutMinutes?: number;
   transcriptionModel?: TranscriptionModel | null;
   transcriptionConcurrency?: number;
+  transcriptionBatchSize?: number;
   transcriptionDefaultLanguage?: string;
   mediaSourceId?: string;
   mediaRoots?: Record<string, string>;
@@ -162,6 +165,14 @@ export function resolveSyncTimeoutMinutes(value: unknown, sourceType: string): n
     throw new Error('sync_timeout_minutes must be positive and fit the timer limit (at most 35791 minutes)');
   }
   return minutes;
+}
+
+export function resolveTranscriptionBatchSize(value: unknown): number {
+  const size = value === undefined ? 100 : value;
+  if (typeof size !== 'number' || !Number.isSafeInteger(size) || size <= 0) {
+    throw new Error('transcription_batch_size must be a positive safe integer');
+  }
+  return size;
 }
 
 export function loadConfig(): Config {
@@ -196,6 +207,7 @@ export function loadConfig(): Config {
     syncTimeoutMinutes: resolveSyncTimeoutMinutes(f.sync_timeout_minutes, sourceType),
     transcriptionModel: f.transcription_model ?? null,
     transcriptionConcurrency: concurrency,
+    transcriptionBatchSize: resolveTranscriptionBatchSize(f.transcription_batch_size),
     transcriptionDefaultLanguage: transcriptionLanguage(f),
     mediaSourceId: f.media_source_id ??
       (process.platform === 'darwin' && (f.chatstorage ?? DEFAULT_CHATSTORAGE) === DEFAULT_CHATSTORAGE

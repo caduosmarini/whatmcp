@@ -189,6 +189,9 @@ embedded.
 When a transcription model is enabled, the macOS LaunchAgent captures new messages
 first, transcribes up to 100 pending audio files, then runs sync to embed the
 published transcripts and capture messages that arrived during transcription.
+Set `"transcription_batch_size": 100` in `~/.whatmcp/config.json` to choose a
+positive integer limit per scheduled cycle. The default is 100; changes apply on
+the next cycle without reinstalling the agent. Manual `transcribe --limit` is independent.
 With transcription disabled it runs sync once as before. Transcription failures
 are logged and do not prevent the final message sync. Capture failures stop the
 cycle, and interrupted jobs do not start another stage.

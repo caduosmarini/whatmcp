@@ -2,9 +2,47 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {join} from 'node:path';
+import {mkdtempSync,rmSync,writeFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {resolveTranscriptionBatchSize} from '../src/config.ts';
 import {runScheduledSync,runTranscriptionProcess} from '../src/scheduled-sync.ts';
 
 const cfg={sourceType:'chatstorage' as const,transcriptionModel:'apple-speech' as const,syncTimeoutMinutes:12};
+
+test('scheduled transcription forwards the configured batch size to the worker',async()=>{
+  for(const size of [undefined,1,250]){
+    let calls=0;
+    assert.equal(await runScheduledSync({...cfg,transcriptionBatchSize:size},{
+      paused:()=>false,sync:async()=>0,
+      transcribe:async(_command,args)=>{
+        calls++;assert.ok(args.includes(`--limit=${size??100}`));return 0;
+      },
+    }),0);
+    assert.equal(calls,1);
+  }
+});
+
+test('invalid batch sizes cannot start unbounded scheduled work',async()=>{
+  for(const size of [0,-1,1.5,NaN,Infinity,Number.MAX_SAFE_INTEGER+1,'100',null]){
+    assert.throws(()=>resolveTranscriptionBatchSize(size),/transcription_batch_size/);
+    await assert.rejects(runScheduledSync({...cfg,transcriptionBatchSize:size as number},{
+      paused:()=>false,sync:async()=>{assert.fail('invalid config must fail before capture');},
+      transcribe:async()=>{assert.fail('invalid config must fail before transcription');},
+    }),/transcription_batch_size/);
+  }
+});
+
+test('file config loads the default and custom transcription batch size',t=>{
+  const dir=mkdtempSync(join(tmpdir(),'whatmcp-batch-config-'));
+  t.after(()=>rmSync(dir,{recursive:true,force:true}));
+  const script=`import {loadConfig} from './src/config.ts';console.log(loadConfig().transcriptionBatchSize);`;
+  const read=()=>Number(execFileSync(process.execPath,[
+    '--experimental-strip-types','--no-warnings','--input-type=module','-e',script,
+  ],{cwd:join(import.meta.dirname,'..'),env:{...process.env,WHATMCP_HOME:dir},encoding:'utf8'}).trim());
+  assert.equal(read(),100);
+  writeFileSync(join(dir,'config.json'),JSON.stringify({transcription_batch_size:275}));
+  assert.equal(read(),275);
+});
 
 test('new audio is captured before transcription and embedded in the same cycle',async()=>{
   let captured=false,published=false;
