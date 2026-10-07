@@ -121,7 +121,9 @@ export function prepareReadyCandidates(db: DB, cfg: Config, limit = 25): number 
           AND model = ? AND model_revision = ? AND locale = ?
       `);
       for (const row of media) {
-        const old = prior.get(row.message_id) as SelectedTranscript | undefined;
+        const old = (prior.get(row.message_id) ?? db.prepare(`SELECT * FROM audio_transcripts
+          WHERE message_id=? AND audio_sha256=? AND status IN ('done','no_speech')
+          ORDER BY updated_at DESC LIMIT 1`).get(row.message_id,row.sha256)) as SelectedTranscript | undefined;
         // Turning processing off never removes an already archived transcript.
         if (!state.desired_model) { if (old) picks.push(old); continue; }
         const target = row.sha256 ? requested.get(row.message_id, row.sha256,

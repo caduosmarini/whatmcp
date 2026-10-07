@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { runIndex } from '../src/index/indexer.ts';
 import { openStore } from '../src/db/index.ts';
 import { runTranscription, importMediaManifest } from '../src/transcription/worker.ts';
-import { resolveMediaPath, scanSourceMedia } from '../src/transcription/media.ts';
+import { resolveMediaPath, scanSourceMedia, hashFile } from '../src/transcription/media.ts';
 import { reconcileProjectionModel, prepareReadyCandidates, publishCandidates } from '../src/transcription/projection.ts';
 import { embedMissing } from '../src/index/embed.ts';
 import { transcriptionLanguage, type Config } from '../src/config.ts';
@@ -114,7 +114,7 @@ test('model switch retains old active windows until the new result is complete',
     const old = (db.prepare('SELECT text FROM windows').get() as any).text;
     db.close();
     const switched = { ...f.cfg, transcriptionModel: 'apple-dictation' as const };
-    const failed = await runTranscription(switched, mockOptions(() => { throw new Error('retry'); }));
+    const failed = await runTranscription(switched, {...mockOptions(() => {throw new Error('retry');}),reprocess:true});
     assert.equal(failed.published, 1);
     const interim = openStore(f.store);
     assert.equal((interim.prepare('SELECT text FROM windows').get() as any).text, old);
@@ -207,7 +207,7 @@ test('returning to a cached language republishes its transcript', async () => {
   const f = fixture();
   try {
     await runTranscription(f.cfg, mockOptions(() => 'português'));
-    await runTranscription({...f.cfg, transcriptionDefaultLanguage: 'en-US'}, mockOptions(() => 'English'));
+    await runTranscription({...f.cfg, transcriptionDefaultLanguage: 'en-US'}, {...mockOptions(() => 'English'),reprocess:true});
     const result = await runTranscription(f.cfg, mockOptions(() => { throw new Error('cached'); }));
     assert.equal(result.processed, 0);
     const db = openStore(f.store);
@@ -274,5 +274,52 @@ test('disabling processing and projecting keeps archived transcripts searchable'
     assert.deepEqual(db.prepare('SELECT text,content_hash FROM windows').all(),before);
     assert.equal((db.prepare('SELECT COUNT(*) n FROM active_transcripts').get() as any).n,1);
     db.close();
+  } finally {rmSync(f.dir,{recursive:true,force:true});}
+});
+
+test('unchanged files skip hashing and forwarded audio shares the content cache', async () => {
+  const f=fixture();
+  try {
+    addAudio(f,'forwarded','fake audio bytes');
+    let calls=0,hashes=0;
+    const options={duration:async()=>1,convert:mockOptions(()=> '').convert,
+      transcribe:async()=>{calls++;return 'shared transcript';},
+      hash:async(path:string)=>{hashes++;return hashFile(path);}};
+    const first=await runTranscription(f.cfg,options);
+    assert.equal(first.processed,2);assert.equal(first.reused,1);assert.equal(calls,1);assert.equal(hashes,2);
+    await runTranscription(f.cfg,options);
+    assert.equal(hashes,2);assert.equal(calls,1);
+    await runTranscription(f.cfg,{...options,verifyFiles:true});
+    assert.equal(hashes,4);assert.equal(calls,1);
+  } finally {rmSync(f.dir,{recursive:true,force:true});}
+});
+
+test('changing defaults preserves old work until historical reprocessing is requested', async () => {
+  const f=fixture();
+  try {
+    await runTranscription(f.cfg,mockOptions(()=> 'old engine'));
+    const cfg={...f.cfg,transcriptionModel:'apple-dictation' as const};
+    const unchanged=await runTranscription(cfg,mockOptions(()=>{throw new Error('unrequested');}));
+    assert.equal(unchanged.processed,0);
+    const db=openStore(f.store);
+    assert.equal((db.prepare('SELECT model FROM active_transcripts').get() as any).model,'apple-speech');db.close();
+    const changed=await runTranscription(cfg,{...mockOptions(()=> 'new engine'),reprocess:true});
+    assert.equal(changed.processed,1);
+  } finally {rmSync(f.dir,{recursive:true,force:true});}
+});
+
+test('publication occurs during a long batch and new file bytes are retranscribed', async () => {
+  const f=fixture();
+  try {
+    for(let i=0;i<26;i++) addAudio(f,`voice-${i}`,`bytes-${i}`);
+    let calls=0;
+    await runTranscription(f.cfg,{duration:async()=>1,convert:mockOptions(()=> '').convert,
+      transcribe:async()=>{
+        if(++calls===26){const db=openStore(f.store);
+          assert.match((db.prepare('SELECT text FROM windows LIMIT 1').get() as any).text,/published/);db.close();}
+        return 'published';}});
+    writeFileSync(join(f.mediaRoot,'voice.ogg'),'new content of different size');
+    const result=await runTranscription(f.cfg,{duration:async()=>1,convert:mockOptions(()=> '').convert,transcribe:async()=> 'changed content'});
+    assert.equal(result.processed,1);
   } finally {rmSync(f.dir,{recursive:true,force:true});}
 });

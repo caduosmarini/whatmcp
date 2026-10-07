@@ -178,9 +178,51 @@ function setResult(db: DB, row: AudioMediaRow, sha: string,
   }
 }
 
+/** Cheap discovery is separate from inference; unchanged bytes are checked daily. */
+export async function refreshAudioMedia(db: DB, cfg: Config, options: {
+  hash?: typeof hashFile; verifyFiles?: boolean;
+} = {}): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  for (const row of listAudioMedia(db)) {
+    let path: string;
+    try { path = mediaPath(cfg, row); }
+    catch {
+      if (row.availability !== 'unavailable') {
+        db.exec('BEGIN');
+        try {
+          db.prepare("UPDATE audio_media SET availability='unavailable', checked_at=? WHERE message_id=?")
+            .run(now, row.message_id);
+          markProjectionDirty(db,row.thread_id); db.exec('COMMIT');
+        } catch(e) {db.exec('ROLLBACK');throw e;}
+      }
+      continue;
+    }
+    const stat = statSync(path);
+    const unchanged = row.sha256 && row.mtime_ms === stat.mtimeMs && row.size_bytes === stat.size;
+    const verify = options.verifyFiles || !unchanged || !row.hash_verified_at || now-row.hash_verified_at >= 86400;
+    const sha = verify ? await (options.hash ?? hashFile)(path) : row.sha256!;
+    const after = statSync(path);
+    if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) {
+      throw new Error('Audio changed during inventory; run transcription again');
+    }
+    if (verify || row.availability !== 'available') {
+      db.exec('BEGIN');
+      try {
+        db.prepare(`UPDATE audio_media SET sha256=?,size_bytes=?,mtime_ms=?,availability='available',
+          checked_at=?,hash_verified_at=?,duration_s=CASE WHEN sha256 IS ? THEN duration_s ELSE NULL END
+          WHERE message_id=?`).run(sha,stat.size,stat.mtimeMs,now,
+            verify ? now : row.hash_verified_at,sha,row.message_id);
+        if (row.sha256 !== sha || row.availability !== 'available') markProjectionDirty(db,row.thread_id);
+        db.exec('COMMIT');
+      } catch(e) {db.exec('ROLLBACK');throw e;}
+    }
+  }
+}
+
 export interface TranscriptionRun {
   processed: number;
   noSpeech: number;
+  reused: number;
   unavailable: number;
   failed: number;
   prepared: number;
@@ -190,6 +232,10 @@ export interface TranscriptionRun {
 export async function runTranscription(cfg: Config, options: {
   limit?: number;
   retryErrors?: boolean;
+  /** Request the configured engine/language for historical audio too. */
+  reprocess?: boolean;
+  verifyFiles?: boolean;
+  hash?: typeof hashFile;
   onProgress?: (message: string) => void;
   /** Test-only adapter; the default uses the configured real provider. */
   transcribe?: typeof transcribeSegment;
@@ -208,7 +254,7 @@ export async function runTranscription(cfg: Config, options: {
   if (!release) throw new Error('another transcription worker is already running');
   const db = openStore(cfg.store);
   const result: TranscriptionRun = {
-    processed: 0, noSpeech: 0, unavailable: 0, failed: 0, prepared: 0, published: 0,
+    processed: 0, noSpeech: 0, reused: 0, unavailable: 0, failed: 0, prepared: 0, published: 0,
   };
   const locale = cfg.transcriptionDefaultLanguage ?? 'pt-BR';
   const say = options.onProgress ?? (() => {});
@@ -218,32 +264,52 @@ export async function runTranscription(cfg: Config, options: {
       SET status = 'retryable_error', attempts = 0, error_code = NULL, lease_until = NULL
       WHERE model = ? AND locale = ? AND status = 'permanent_error'`)
       .run(model, locale);
+    await refreshAudioMedia(db,cfg,options);
+    // Exclusive worker lock proves no other live worker owns these leases.
+    db.prepare("UPDATE audio_transcripts SET lease_until=0 WHERE status='processing'") .run();
     const rows = listAudioMedia(db);
+    if (options.reprocess) {
+      const enqueue = db.prepare(`INSERT OR IGNORE INTO audio_transcripts
+        (message_id,audio_sha256,model,model_revision,locale,status,updated_at)
+        VALUES (?,?,?,?,?,'pending',?)`);
+      db.exec('BEGIN');
+      try {
+        for (const row of rows) if (row.sha256 && row.availability === 'available') {
+          enqueue.run(row.message_id,row.sha256,model,REVISION,locale,Math.floor(Date.now()/1000));
+          markProjectionDirty(db,row.thread_id);
+        }
+        db.exec('COMMIT');
+      } catch(e) {db.exec('ROLLBACK');throw e;}
+    }
+    const target = db.prepare(`SELECT status FROM audio_transcripts WHERE message_id=?
+      AND audio_sha256=? AND model=? AND model_revision=? AND locale=?`);
+    const historical = db.prepare(`SELECT 1 FROM audio_transcripts WHERE message_id=?
+      AND audio_sha256=? AND status IN ('done','no_speech') LIMIT 1`);
+    const cached = db.prepare(`SELECT text,status FROM audio_transcripts WHERE audio_sha256=?
+      AND model=? AND model_revision=? AND locale=? AND status IN ('done','no_speech') LIMIT 1`);
+    const flush = () => {
+      for (;;) {
+        const n=prepareReadyCandidates(db,cfg,100);
+        result.prepared+=n;result.published+=publishCandidates(db,cfg,100);
+        if(!n) break;
+      }
+    };
+    let completedSincePublish=0;
     for (const row of rows) {
       if (result.processed + result.failed >= (options.limit ?? Infinity)) break;
-      let path: string;
-      try { path = mediaPath(cfg, row); }
-      catch {
-        db.prepare('UPDATE audio_media SET availability = ?, checked_at = ? WHERE message_id = ?')
-          .run('unavailable', Math.floor(Date.now() / 1000), row.message_id);
-        result.unavailable++;
+      if (row.availability !== 'available' || !row.sha256) {result.unavailable++;continue;}
+      const sha=row.sha256;
+      const existing=target.get(row.message_id,sha,model,REVISION,locale) as {status:string}|undefined;
+      if (!existing && historical.get(row.message_id,sha) && !options.reprocess) continue;
+      if (!claim(db,row,sha,model,locale)) continue;
+      const copy=cached.get(sha,model,REVISION,locale) as {text:string|null;status:string}|undefined;
+      if(copy) {
+        setResult(db,row,sha,model,locale,copy.status,copy.text,null);
+        result.processed++;result.reused++;if(copy.status==='no_speech')result.noSpeech++;
+        if(++completedSincePublish>=25){flush();completedSincePublish=0;}
         continue;
       }
-      const stat = statSync(path);
-      const previous = row.sha256;
-      const sameFile = row.mtime_ms === stat.mtimeMs && row.size_bytes === stat.size;
-      const sha = await hashFile(path);
-      if (!sameFile || previous !== sha || row.availability !== 'available') {
-        db.exec('BEGIN');
-        try {
-          db.prepare(`UPDATE audio_media SET sha256 = ?, size_bytes = ?, mtime_ms = ?,
-            availability = 'available', checked_at = ? WHERE message_id = ?`)
-            .run(sha, stat.size, stat.mtimeMs, Math.floor(Date.now() / 1000), row.message_id);
-          if (previous !== sha) markProjectionDirty(db, row.thread_id);
-          db.exec('COMMIT');
-        } catch (e) { db.exec('ROLLBACK'); throw e; }
-      }
-      if (!claim(db, row, sha, model, locale)) continue;
+      const path=mediaPath(cfg,row);
       const tempDir = mkdtempSync(join(tmpdir(), 'whatmcp-audio-'));
       try {
         const count = Math.max(1, Math.ceil(await (options.duration ?? durationSeconds)(cfg, path) / SEGMENT_SECONDS));
@@ -273,6 +339,7 @@ export async function runTranscription(cfg: Config, options: {
         const text = texts.filter(Boolean).join(' ').trim();
         setResult(db, row, sha, model, locale, text ? 'done' : 'no_speech', text, null);
         result.processed++;
+        completedSincePublish++;
         if (!text) result.noSpeech++;
         say(`${result.processed} audio(s) transcribed`);
       } catch (e) {
@@ -291,15 +358,9 @@ export async function runTranscription(cfg: Config, options: {
       } finally {
         rmSync(tempDir, { recursive: true, force: true });
       }
+      if(completedSincePublish>=25){flush();completedSincePublish=0;}
     }
-    // A run publishes FTS atomically by conversation. Embedding is a separate,
-    // costed step: `embed` already resumes by content hash after interruption.
-    for (;;) {
-      const n = prepareReadyCandidates(db, cfg, 100);
-      result.prepared += n;
-      result.published += publishCandidates(db, cfg, 100);
-      if (n === 0) break;
-    }
+    flush();
     return result;
   } finally {
     db.close();

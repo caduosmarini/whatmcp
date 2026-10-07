@@ -14,6 +14,8 @@ export interface AudioMediaRow {
   size_bytes: number | null;
   mtime_ms: number | null;
   availability: string;
+  hash_verified_at: number | null;
+  duration_s: number | null;
 }
 
 /** Never let a source-provided path or symlink escape the configured media root. */
@@ -62,7 +64,8 @@ export function upsertAudioReferences(db: DB, refs: RawAudioReference[], sourceI
     VALUES (?, ?, ?)
     ON CONFLICT(message_id) DO UPDATE SET
       source_id = excluded.source_id, relative_path = excluded.relative_path,
-      availability = 'unknown', checked_at = NULL, sha256 = NULL
+      availability = 'unknown', checked_at = NULL, sha256 = NULL,
+      hash_verified_at = NULL, duration_s = NULL, size_bytes = NULL, mtime_ms = NULL
   `);
   const touched = new Set<string>();
   let changed = 0;
@@ -98,7 +101,7 @@ export function scanSourceMedia(
 export function listAudioMedia(db: DB): AudioMediaRow[] {
   return db.prepare(`
     SELECT a.*, m.thread_id FROM audio_media a JOIN messages m ON m.id = a.message_id
-    ORDER BY m.ts, m.id
+    ORDER BY m.thread_id, m.ts, m.id
   `).all() as AudioMediaRow[];
 }
 

@@ -314,10 +314,10 @@ switch (cmd) {
     const limit = Number(flagValue('limit', '100'));
     if (!Number.isInteger(limit) || limit < 1) throw new Error('--limit must be positive');
     const result = await runTranscription(cfg, {
-      limit, retryErrors: flag('retry-errors'), onProgress: (m) => console.log(`  ${m}`),
+      limit, retryErrors: flag('retry-errors'), reprocess: flag('reprocess'), verifyFiles: flag('verify-files'), onProgress: (m) => console.log(`  ${m}`),
     });
     console.log(`transcription: ${result.processed} done, ${result.noSpeech} without speech, ` +
-      `${result.unavailable} unavailable, ${result.failed} failed; ` +
+      `${result.reused} reused, ${result.unavailable} unavailable, ${result.failed} failed; ` +
       `${result.prepared} conversation(s) prepared, ${result.published} published`);
     break;
   }
