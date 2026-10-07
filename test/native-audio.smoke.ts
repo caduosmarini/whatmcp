@@ -70,7 +70,7 @@ for(const model of models.filter(m=>m.available && m.model!=='gpt-transcribe')) 
   const result=await runTranscription(cfg,{reprocess:true,onProgress:console.log});
   const db=openStore(f.store);
   const rows=db.prepare('SELECT model,status,text,error_code FROM audio_transcripts').all();
-  const windows=db.prepare('SELECT text FROM windows').all();
+  const windows=db.prepare('SELECT id,text,content_hash FROM windows').all();
   const conversation=getConversation({storePath:f.store,embedCfg:{model:f.cfg.openaiModel,dimensions:f.cfg.openaiDims,apiKey:''}}, {thread_id:'123@s.whatsapp.net'});
   assert.match(conversation.find((m:any)=>m.kind==='audio')?.transcription_text ?? '', /orçamento/i);
   const hits=db.prepare("SELECT COUNT(*) n FROM windows_fts WHERE windows_fts MATCH 'orçamento'").get();
@@ -78,6 +78,9 @@ for(const model of models.filter(m=>m.available && m.model!=='gpt-transcribe')) 
   console.log('Result',JSON.stringify({model:model.model,result,rows,windows,hits}));
   const again=await runTranscription(cfg);
   console.log('Idempotency',JSON.stringify(again));
+  const check=openStore(f.store);
+  assert.deepEqual(check.prepare('SELECT id,text,content_hash FROM windows').all(),windows);
+  check.close();
   const recognized=rows.find((row:any)=>row.model===model.model) as any;
   assert.equal(recognized.status,'done');
   assert.match(recognized.text,/orçamento/i);
