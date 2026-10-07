@@ -2,6 +2,27 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { splitBatches, estimateTokens, InputTooLongError } from '../src/index/openai.ts';
 import { chunk } from '../src/index/chunker.ts';
+import { execFileSync } from 'node:child_process';
+
+test('long unbroken Unicode text completes in a bounded subprocess without losing its tail', () => {
+  const moduleUrl=new URL('../src/index/chunker.ts',import.meta.url).href;
+  // The former JS BPE implementation stalls for minutes on long Unicode runs.
+  // A child deadline also detects that regression when its event loop is blocked.
+  const code=`
+    import {chunk} from ${JSON.stringify(moduleUrl)};
+    const text='\\u3164'.repeat(61056)+' fim';
+    const windows=chunk([{message_id:'audio',thread_id:'chat',sender_name:'Ana',ts:1,text}]);
+    const restored=windows.map(w=>w.text.slice('Ana: '.length)).join('');
+    console.log(JSON.stringify({parts:windows.length,complete:restored.replaceAll(' ','')===text.replaceAll(' ','')}));
+  `;
+  const out=execFileSync(process.execPath,[
+    '--experimental-sqlite','--experimental-strip-types','--no-warnings',
+    '--input-type=module','-e',code,
+  ],{encoding:'utf8',timeout:20000,windowsHide:true});
+  const result=JSON.parse(out);
+  assert.ok(result.parts>1);
+  assert.equal(result.complete,true);
+});
 
 test('valid non-Latin and emoji payloads are embedded intact', () => {
   for (const text of ['例'.repeat(3000) + ' término', '😀'.repeat(3000)]) {

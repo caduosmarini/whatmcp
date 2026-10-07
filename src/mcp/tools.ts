@@ -621,7 +621,7 @@ export function buildServer(deps: ToolDeps): McpServer {
       async ({ full }) => {
         const [command, args] = syncWorkerCommand(full);
         let output = '';
-        const timeoutMs = syncTimeoutMs(cfg.sourceType, !!(cfg.transcriptionAutoAfterImport && cfg.transcriptionModel));
+        const timeoutMs = syncTimeoutMs(cfg.sourceType, cfg.syncTimeoutMinutes, !!(cfg.transcriptionAutoAfterImport && cfg.transcriptionModel));
         const code = await runSyncProcess(command, args, {
           timeoutMs,
           onOutput: (chunk) => { output = (output + chunk).slice(-8000); },

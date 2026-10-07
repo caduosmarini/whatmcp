@@ -115,9 +115,9 @@ the command line.
 ## Upstream v0.2.0 integration
 
 Windows sync uses the upstream supervised worker and SQLite process lock, with a
-30-minute timeout (ChatStorage keeps the upstream 5-minute timeout). The watchdog
-adds 45 minutes when automatic audio transcription is enabled (75 minutes total
-on Windows, 50 for ChatStorage). A timeout
+30-minute timeout (ChatStorage defaults to 10 minutes). The watchdog
+uses the configurable `sync_timeout_minutes` base and adds 45 minutes when automatic audio transcription is enabled (75 minutes total
+on Windows, 55 for ChatStorage). A timeout
 pauses scheduled attempts until a successful manual retry. On Windows the worker
 and its helper processes are terminated together; WhatsApp remains open.
 

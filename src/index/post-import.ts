@@ -5,6 +5,8 @@ import { embedMissing, vectorCoverage, type ProgressEvent } from './embed.ts';
 
 /** Called under the import/sync lock, after acquisition has finished. */
 export async function processImportedArchive(cfg: Config, options: {
+  /** Scheduled sync already owns its bounded transcription stage. */
+  skipTranscription?: boolean;
   onProgress?: (message: string) => void;
   onEmbeddingProgress?: (event: ProgressEvent) => void;
   calibrate?: (cfg: Config, embedded: number) => Promise<void>;
@@ -14,7 +16,7 @@ export async function processImportedArchive(cfg: Config, options: {
 } = {}): Promise<void> {
   const say = options.onProgress ?? (() => {});
   let audioError: Error | undefined;
-  if (cfg.transcriptionAutoAfterImport && cfg.transcriptionModel) {
+  if (!options.skipTranscription && cfg.transcriptionAutoAfterImport && cfg.transcriptionModel) {
     say('transcribing pending audio');
     try {
       const r = await (options.transcribe ?? runTranscription)(cfg, {

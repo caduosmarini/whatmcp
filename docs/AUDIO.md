@@ -74,7 +74,7 @@ npm run wa -- doctor
 npm run embed                  # estimate first; sends new text windows to OpenAI
 ```
 
-`transcribe` runs independently of the five-minute message-sync watchdog. One
+`transcribe` runs independently of the configurable message-sync watchdog. One
 process holds a separate transcription lock. It saves a stable segment plan and
 each completed segment, so a later run resumes an interrupted file. Long files
 are split into at most ten-minute pieces, preferring nearby silence when possible.
@@ -133,8 +133,9 @@ audio automatically after every scheduled or manual `sync`, `index`,
 embeddings, under the shared import/sync lock. It uses the configured model and
 language, resumes interrupted segments, and reuses completed content hashes;
 it does not request historical replacement or reset permanent errors.
-The option defaults to `false`; a configured transcription model alone does not
-enable automatic uploads. With it disabled, sync still embeds pending text,
+The option defaults to `false` for these import commands; a model alone does not
+enable their automatic transcription. The macOS LaunchAgent has its independent
+model-enabled scheduled workflow described below. With it disabled, sync still embeds pending text,
 while manual index/import commands retain their import-only behavior.
 
 Automatic transcription requires `transcription_model` too. On Windows:
@@ -150,10 +151,20 @@ Automatic transcription requires `transcription_model` too. On Windows:
 Usable partial transcripts and new text are embedded even if some audio fails;
 the command then reports the failure. Unavailable audio does not block imports.
 The next run resumes pending work, respecting provider cooldowns. The automatic
-sync watchdog allows an additional 45 minutes (75 total on Windows, 50 for
+sync watchdog uses `sync_timeout_minutes` and allows an additional 45 minutes (75 total on Windows, 55 for
 ChatStorage); a timeout preserves completed work and pauses scheduled sync until
 a successful manual retry. Direct manual imports are outside that sync watchdog.
 Standalone `transcribe` remains available and retains its explicit batch limit.
+
+The macOS LaunchAgent retains the upstream `scheduled-sync` workflow: capture
+messages, transcribe up to `transcription_batch_size` pending files (default 100)
+when a model is configured, then capture arrivals and embed completed transcripts.
+Its capture stage defers all processing, and its final stage skips automatic
+transcription, so enabling automatic imports never bypasses the scheduled batch
+limit or starts a second audio pass. Capture and final sync use
+`sync_timeout_minutes`; the separate transcription stage retains its per-segment
+timeouts. Manual `transcribe --limit` remains independent. Reinstall existing
+macOS agents with `npm run wa -- sync-every <hours>` to use this workflow.
 
 Windows scheduled sync uses WAren6 and preserves the
 available audio; choose `gpt-transcribe` explicitly and provide `ffmpeg`/`ffprobe`

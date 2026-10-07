@@ -130,3 +130,48 @@ test('internal import-only bypasses held parent sync lock and automatic audio up
     f.cleanup();
   }
 });
+
+ test('scheduled final sync embeds without a second automatic transcription pass', async () => {
+  const f = fixture();
+  try {
+    let embedded = false;
+    await processImportedArchive(f.cfg, {
+      skipTranscription: true,
+      transcribe: async () => { assert.fail('scheduled batch already transcribed'); },
+      embed: async () => { embedded = true; return embedResult; },
+    });
+    assert.equal(embedded, true);
+  } finally { f.cleanup(); }
+});
+
+test('scheduled index-only capture skips automatic audio and embedding calls', () => {
+  const f = fixture();
+  try {
+    const source = join(f.dir, 'ChatStorage.sqlite');
+    const db = new DatabaseSync(source);
+    db.exec(`CREATE TABLE ZWACHATSESSION (Z_PK INTEGER PRIMARY KEY,ZCONTACTJID TEXT,ZPARTNERNAME TEXT);
+      CREATE TABLE ZWAGROUPMEMBER (Z_PK INTEGER PRIMARY KEY,ZMEMBERJID TEXT,ZCONTACTNAME TEXT);
+      CREATE TABLE ZWAPROFILEPUSHNAME (ZJID TEXT,ZPUSHNAME TEXT);
+      CREATE TABLE ZWAMESSAGE (Z_PK INTEGER PRIMARY KEY,ZSTANZAID TEXT,ZISFROMME INTEGER,
+        ZMESSAGETYPE INTEGER,ZTEXT TEXT,ZMESSAGEDATE REAL,ZCHATSESSION INTEGER,
+        ZGROUPMEMBER INTEGER,ZPARENTMESSAGE INTEGER);
+      INSERT INTO ZWACHATSESSION VALUES(1,'123@s.whatsapp.net','Fixture');
+      INSERT INTO ZWAMESSAGE VALUES(1,'fresh',0,0,'fresh message',700000000,1,NULL,NULL);`);
+    db.close();
+    writeFileSync(join(f.dir,'config.json'),JSON.stringify({store:f.cfg.store,chatstorage:source,
+      transcription_auto_after_import:true,transcription_model:'gpt-transcribe',
+      openai_api_key:'offline-test-only'}));
+    const env={...process.env};
+    for(const key of Object.keys(env))if(key.startsWith('WHATMCP_')||key==='OPENAI_API_KEY')delete env[key];
+    env.WHATMCP_HOME=f.dir;
+    const result=spawnSync(process.execPath,['--experimental-sqlite','--experimental-strip-types','--no-warnings',
+      resolve(import.meta.dirname,'../src/cli.ts'),'sync-worker','--index-only'],
+      {env,encoding:'utf8',timeout:30000,windowsHide:true});
+    assert.equal(result.status,0,result.stderr);
+    assert.match(result.stdout,/processing deferred/);
+    assert.doesNotMatch(result.stdout,/transcribing pending|embedding pending/);
+    const archive=new DatabaseSync(f.cfg.store,{readOnly:true});
+    try{assert.equal(archive.prepare('SELECT COUNT(*) n FROM messages').get().n,1);}
+    finally{archive.close();}
+  }finally{f.cleanup();}
+});
