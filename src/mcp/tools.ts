@@ -185,7 +185,7 @@ export function buildServer(deps: ToolDeps): McpServer {
   }
 
   const server = new McpServer(
-    { name: 'whatmcp', version: '0.1.0' },
+    { name: 'whatmcp', version: '0.2.1' },
     {
       instructions:
         "Read-only access to the user's own WhatsApp history, archived locally. " +
