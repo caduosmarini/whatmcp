@@ -13,6 +13,8 @@
  * here to accidentally inherit.
  */
 
+import { tokenCount } from './tokens.ts';
+
 const ENDPOINT = 'https://api.openai.com/v1/embeddings';
 
 export interface EmbedConfig {
@@ -30,32 +32,10 @@ export function modelTag(cfg: { model: string; dimensions: number }): string {
   return `openai/${cfg.model}@${cfg.dimensions}`;
 }
 
-/**
- * Rough token estimate for batching. Deliberately pessimistic: accented text,
- * non-Latin scripts and emoji all tokenize worse than plain English, and the
- * cost of over-splitting a batch is one extra round trip, while under-splitting
- * is a hard 400.
- */
-export function estimateTokens(s: string): number {
-  return Math.ceil(s.length / 2.5);
-}
-
+/** Count the full payload locally with the embedding models' tokenizer. */
+export const estimateTokens = tokenCount;
 const MAX_INPUTS_PER_REQUEST = 256;
-const MAX_TOKENS_PER_REQUEST = 250_000; // under the documented 300k ceiling
-const MAX_BYTES_PER_INPUT = 8_000; // model limit is 8192 tokens
-
-function truncateUtf8(text: string, maxBytes: number): string {
-  if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text;
-  let bytes = 0;
-  let end = 0;
-  for (const char of text) {
-    const size = Buffer.byteLength(char, 'utf8');
-    if (bytes + size > maxBytes) break;
-    bytes += size;
-    end += char.length;
-  }
-  return text.slice(0, end);
-}
+const MAX_TOKENS_PER_REQUEST = 250_000;
 
 export interface Batch {
   texts: string[];
@@ -69,13 +49,9 @@ export function splitBatches(texts: string[]): Batch[] {
   let curTrunc = 0;
 
   for (const t of texts) {
-    // Emoji-heavy text can exceed the model limit within 4,000 characters.
-    // Truncate on code-point boundaries to keep the API request valid.
-    const over = Buffer.byteLength(t, 'utf8') > MAX_BYTES_PER_INPUT;
-    const text = over ? truncateUtf8(t, MAX_BYTES_PER_INPUT) : t;
-    // BPE's byte fallback cannot exceed the UTF-8 byte count. This upper bound
-    // also covers emoji-heavy messages that defeat the character estimate.
-    const tk = Buffer.byteLength(text, 'utf8');
+    const text = t;
+    const tk = tokenCount(text);
+    if (tk > 8192) throw new InputTooLongError('Embedding input exceeds 8192 tokens; re-index the thread to split its windows.');
 
     if (cur.length >= MAX_INPUTS_PER_REQUEST || curTokens + tk > MAX_TOKENS_PER_REQUEST) {
       if (cur.length > 0) batches.push({ texts: cur, truncated: curTrunc });
@@ -85,7 +61,7 @@ export function splitBatches(texts: string[]): Batch[] {
     }
     cur.push(text);
     curTokens += tk;
-    if (over) curTrunc++;
+
   }
   if (cur.length > 0) batches.push({ texts: cur, truncated: curTrunc });
   return batches;

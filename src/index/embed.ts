@@ -158,6 +158,12 @@ export async function embedMissing(
 
     if (opts.limit !== undefined) pending = pending.slice(0, opts.limit);
 
+    // Older builds may have stored oversized windows. Leave their full text
+    // searchable and report them; never store a vector for a truncated payload.
+    const eligible = pending.filter(p => estimateTokens(p.text) <= 8192);
+    const oversized = pending.length - eligible.length;
+    if (oversized) emit({phase:'warn',code:'input_too_long',
+      detail:`${oversized} legacy windows need re-indexing; full text remains in keyword search`});
     const total = Number((db.prepare('SELECT COUNT(*) c FROM windows').get() as any).c);
     const estTokens = pending.reduce((n, p) => n + estimateTokens(p.text), 0);
 
@@ -189,7 +195,7 @@ export async function embedMissing(
     `);
 
     let embedded = 0;
-    let failed = 0;
+    let failed = oversized;
     let truncated = 0;
     let tokens = 0;
     let lastEmit = 0;
@@ -235,10 +241,10 @@ export async function embedMissing(
       truncated += batchTruncated;
     };
 
-    for (let i = 0; i < pending.length; i += batchSize) {
+    for (let i = 0; i < eligible.length; i += batchSize) {
       if (opts.signal?.aborted) break;
 
-      const slice = pending.slice(i, i + batchSize);
+      const slice = eligible.slice(i, i + batchSize);
       // splitBatches enforces the API's own per-request input and token ceilings,
       // so batchSize is an upper bound rather than the actual request size.
       const batches = splitBatches(slice.map((s) => s.text));

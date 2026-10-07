@@ -1,20 +1,37 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { splitBatches } from '../src/index/openai.ts';
+import { splitBatches, estimateTokens, InputTooLongError } from '../src/index/openai.ts';
+import { chunk } from '../src/index/chunker.ts';
 
-test('truncates emoji-heavy windows on UTF-8 boundaries before embedding', () => {
-  const text = '😀'.repeat(3_000);
-  const [batch] = splitBatches([text]);
-  assert.equal(batch.truncated, 1);
-  assert.ok(Buffer.byteLength(batch.texts[0], 'utf8') <= 8_000);
-  assert.ok(!batch.texts[0].includes('\uFFFD'));
-  assert.ok(text.startsWith(batch.texts[0]));
-});
-
-test('splits requests by the UTF-8 byte upper bound', () => {
-  const batches = splitBatches(Array(40).fill('😀'.repeat(2_000)));
-  assert.equal(batches.flatMap((batch) => batch.texts).length, 40);
-  for (const batch of batches) {
-    assert.ok(batch.texts.reduce((n, s) => n + Buffer.byteLength(s, 'utf8'), 0) <= 250_000);
+test('valid non-Latin and emoji payloads are embedded intact', () => {
+  for (const text of ['例'.repeat(3000) + ' término', '😀'.repeat(3000)]) {
+    const [batch] = splitBatches([text]);
+    assert.equal(batch.truncated, 0);
+    assert.equal(batch.texts[0], text);
   }
+});
+test('batches use tokens rather than bytes and respect request ceilings', () => {
+  const text = 'A reunião de amanhã será sobre orçamento e manutenção. '.repeat(75);
+  const input = Array(1000).fill(text);
+  const batches = splitBatches(input);
+  assert.ok(batches.length < 10);
+  assert.deepEqual(batches.flatMap(b => b.texts), input);
+  for (const b of batches) {
+    assert.ok(b.texts.length <= 256);
+    assert.ok(b.texts.reduce((n,t)=>n+estimateTokens(t),0)<=250000);
+  }
+});
+test('oversized transcripts split into complete, attributable windows without broken Unicode', () => {
+  const text = '﷽'.repeat(3000) + ' término';
+  assert.throws(()=>splitBatches([text]),InputTooLongError);
+  const windows=chunk([{message_id:'audio',thread_id:'chat',sender_name:'Ana',ts:1,text}]);
+  assert.ok(windows.length>1);
+  assert.ok(windows.map(w=>w.text.slice('Ana: '.length)).join('').replaceAll(' ','') === text.replaceAll(' ',''));
+  for (const w of windows) {
+    assert.ok(estimateTokens(w.text)<=8000);
+    assert.ok(!w.text.includes('\uFFFD'));
+    assert.equal(w.parts[0].message_id,'audio');
+  }
+  const parts=windows.flatMap(w=>w.parts.map(p=>p.part_no));
+  assert.equal(new Set(parts).size,parts.length);
 });
