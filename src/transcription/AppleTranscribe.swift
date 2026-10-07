@@ -51,22 +51,32 @@ struct AppleTranscribe {
                 let analyzer = SpeechAnalyzer(modules: [module])
                 let collector = Task { () throws -> [String] in
                     var parts: [String] = []
-                    for try await result in module.results { parts.append(String(result.text.characters)) }
+                    for try await result in module.results where result.isFinal {
+                        parts.append(String(result.text.characters))
+                    }
                     return parts
                 }
-                _ = try await analyzer.analyzeSequence(from: audio)
-                try await analyzer.finalizeAndFinishThroughEndOfInput()
+                if let lastSample = try await analyzer.analyzeSequence(from: audio) {
+                    try await analyzer.finalizeAndFinish(through: lastSample)
+                } else {
+                    await analyzer.cancelAndFinishNow()
+                }
                 transcription = try await collector.value.joined(separator: " ")
             } else if model == "apple-dictation" {
                 let module = DictationTranscriber(locale: locale, preset: .longDictation)
                 let analyzer = SpeechAnalyzer(modules: [module])
                 let collector = Task { () throws -> [String] in
                     var parts: [String] = []
-                    for try await result in module.results { parts.append(String(result.text.characters)) }
+                    for try await result in module.results where result.isFinal {
+                        parts.append(String(result.text.characters))
+                    }
                     return parts
                 }
-                _ = try await analyzer.analyzeSequence(from: audio)
-                try await analyzer.finalizeAndFinishThroughEndOfInput()
+                if let lastSample = try await analyzer.analyzeSequence(from: audio) {
+                    try await analyzer.finalizeAndFinish(through: lastSample)
+                } else {
+                    await analyzer.cancelAndFinishNow()
+                }
                 transcription = try await collector.value.joined(separator: " ")
             } else { exit(2) }
             try output(["text": transcription])

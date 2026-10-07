@@ -123,3 +123,21 @@ perform transcription inside sync. This avoids blocking routine sync on a model
 download, a privacy dialog, or the transcription API. To process new audio,
 run `transcribe` again. Windows imports need a refreshed compatible source file
 and extracted media; a scheduled Windows importer is not included.
+
+## Native integration check
+
+The normal test suite uses synthetic SQLite/files and offline provider transports.
+On a Mac with both Apple pt-BR assets already installed, `say`, `ffmpeg`, `ffprobe`
+and Swift, an opt-in integration check generates speech, converts it to Opus,
+transcribes through both Apple engines, verifies conversation reads and FTS, and
+checks that a second run does no duplicate work:
+
+```sh
+WHATMCP_HOME="$(mktemp -d)" node --experimental-sqlite --experimental-strip-types \
+  --no-warnings test/native-audio.smoke.ts
+```
+
+It does not use the live WhatsApp store, upload audio, or download models.
+Successful synthetic recognition verifies integration, not accuracy on real voice
+messages. A model can return empty text even where another model recognizes speech;
+quality and the final service/Windows environment still need separate validation.
