@@ -95,36 +95,46 @@ async function durationSeconds(cfg: Config, path: string): Promise<number> {
 }
 
 export async function inventoryAudio(cfg: Config): Promise<{
-  available: number; unavailable: number; durationS: number; durationUnknown: number;
-  estimatedSeconds: number; estimatedCostUSD: number;
+  available: number; unavailable: number; pending: number; reused: number;
+  durationS: number; durationUnknown: number; estimatedSeconds: number; estimatedCostUSD: number;
 }> {
   const db = openStore(cfg.store);
-  let available = 0, unavailable = 0, durationS = 0, durationUnknown = 0;
+  let available=0,unavailable=0,pending=0,reused=0,durationS=0,durationUnknown=0;
+  const work=new Map<string,AudioMediaRow>();
   try {
-    const rows = db.prepare('SELECT message_id, source_id, relative_path FROM audio_media')
-      .all() as AudioMediaRow[];
-    for (const row of rows) {
-      let path: string;
-      try { path = mediaPath(cfg, row); }
-      catch { unavailable++; continue; }
+    await refreshAudioMedia(db,cfg);
+    const target=db.prepare(`SELECT status FROM audio_transcripts WHERE message_id=? AND audio_sha256=?
+      AND model=? AND model_revision=? AND locale=?`);
+    const completed=db.prepare(`SELECT 1 FROM audio_transcripts WHERE message_id=? AND audio_sha256=?
+      AND status IN ('done','no_speech') LIMIT 1`);
+    const cache=db.prepare(`SELECT 1 FROM audio_transcripts WHERE audio_sha256=? AND model=?
+      AND model_revision=? AND locale=? AND status IN ('done','no_speech') LIMIT 1`);
+    const locale=cfg.transcriptionDefaultLanguage ?? 'pt-BR';
+    for(const row of listAudioMedia(db)){
+      if(row.availability!=='available' || !row.sha256){unavailable++;continue;}
       available++;
-      try {
-        const duration = await durationSeconds(cfg, path);
-        durationS += duration;
-        db.prepare(`UPDATE audio_media SET duration_s = ?, availability = 'available',
-          checked_at = ? WHERE message_id = ?`)
-          .run(duration, Math.floor(Date.now() / 1000), row.message_id);
-      } catch { durationUnknown++; }
+      if(!cfg.transcriptionModel)continue;
+      const result=target.get(row.message_id,row.sha256,cfg.transcriptionModel,REVISION,locale) as
+        {status:string}|undefined;
+      if(result && ['done','no_speech','permanent_error'].includes(result.status))continue;
+      if(!result && completed.get(row.message_id,row.sha256))continue;
+      pending++;
+      if(cache.get(row.sha256,cfg.transcriptionModel,REVISION,locale)){reused++;continue;}
+      if(!work.has(row.sha256))work.set(row.sha256,row);
+    }
+    for(const row of work.values()){
+      try{
+        const duration=row.duration_s ?? await durationSeconds(cfg,mediaPath(cfg,row));
+        durationS+=duration;
+        db.prepare('UPDATE audio_media SET duration_s=? WHERE sha256=?').run(duration,row.sha256);
+      }catch{durationUnknown++;}
     }
   } finally { db.close(); }
-  const model = cfg.transcriptionModel;
-  const estimatedSeconds = model === 'apple-speech'
-    ? .229 * available + .00587 * durationS
-    : model === 'apple-dictation'
-      ? .216 * available + .0198 * durationS
-      : 1.174 * available + .03085 * durationS;
-  return { available, unavailable, durationS, durationUnknown, estimatedSeconds,
-    estimatedCostUSD: model === 'gpt-transcribe' ? durationS / 60 * .0045 : 0 };
+  const model=cfg.transcriptionModel;
+  const estimatedSeconds=model==='apple-speech' ? .229*work.size+.00587*durationS :
+    model==='apple-dictation' ? .216*work.size+.0198*durationS : 1.174*work.size+.03085*durationS;
+  return {available,unavailable,pending,reused,durationS,durationUnknown,estimatedSeconds,
+    estimatedCostUSD:model==='gpt-transcribe' ? durationS/60*.0045 : 0};
 }
 
 async function convertSegment(cfg: Config, source: string, segment: number,
@@ -313,10 +323,10 @@ export async function runTranscription(cfg: Config, options: {
         if(++completedSincePublish>=25){flush();completedSincePublish=0;}
         return;
       }
-      const path=mediaPath(cfg,row);
       const tempDir = mkdtempSync(join(tmpdir(), 'whatmcp-audio-'));
       try {
         // Process an immutable private copy tied to the claimed content hash.
+        const path=mediaPath(cfg,row);
         const source=join(tempDir,`source${extname(path)}`);
         copyFileSync(path,source);
         if(await hashFile(source)!==sha)throw new TranscriptionError('audio changed after inventory',true);
@@ -393,7 +403,8 @@ export async function runTranscription(cfg: Config, options: {
     const tasks=Array.from({length:concurrency},async()=>{
       while(!paused && next<groups.length && started<(options.limit ?? Infinity)){
         const group=groups[next++];
-        for(const row of group)await processAudio(row);
+        try {for(const row of group)await processAudio(row);}
+        catch(e){paused=true;throw e;}
       }
     });
     const settled=await Promise.allSettled(tasks);

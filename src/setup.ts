@@ -238,8 +238,8 @@ export async function runSetup(): Promise<void> {
       rule('6. Audio backfill');
       const inventory = await inventoryAudio(cfg);
       console.log(`  ${inventory.available} accessible audio file(s), ` +
-        `${inventory.unavailable} unavailable; ` +
-        `${(inventory.durationS / 3600).toFixed(1)} hours measured`);
+        `${inventory.unavailable} unavailable; ${inventory.pending} pending (${inventory.reused} cached); ` +
+        `${(inventory.durationS / 3600).toFixed(1)} hours of uncached pending audio measured`);
       if (inventory.durationUnknown) {
         console.log(yellow(`  ${inventory.durationUnknown} duration(s) could not be measured; ` +
           'cost and time below are incomplete.'));
@@ -250,7 +250,7 @@ export async function runSetup(): Promise<void> {
         console.log(`  estimated audio API cost: ~$${inventory.estimatedCostUSD.toFixed(2)}`);
       }
       console.log('  Embedding cost is estimated from the actual new windows after transcription.');
-      if (inventory.available && await confirm('  Iniciar transcrição agora?', false)) {
+      if (inventory.pending && await confirm('  Iniciar transcrição agora?', false)) {
         const result = await runTranscription(cfg, {
           limit: Infinity,
           onProgress: (m) => console.log(dim(`  ${m}`)),

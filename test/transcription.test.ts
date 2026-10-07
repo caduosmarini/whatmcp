@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runIndex } from '../src/index/indexer.ts';
 import { openStore } from '../src/db/index.ts';
-import { runTranscription, importMediaManifest } from '../src/transcription/worker.ts';
+import { runTranscription, importMediaManifest, inventoryAudio } from '../src/transcription/worker.ts';
 import { resolveMediaPath, scanSourceMedia, hashFile } from '../src/transcription/media.ts';
 import {getConversation,searchHybrid} from '../src/search/search.ts';
 import {TRANSCRIPTION_REVISION} from '../src/transcription/identity.ts';
@@ -395,4 +395,15 @@ test('partial vector coverage is reported when only some published windows have 
     const result=await searchHybrid({storePath:f.store,embedCfg:{model:f.cfg.openaiModel,dimensions:1536,apiKey:'test'}},{query:'reunião'});
     assert.match(result.degraded!,/coverage is incomplete/);assert.ok(result.hits.length);
   }finally{globalThis.fetch=original;rmSync(f.dir,{recursive:true,force:true});}
+});
+
+test('completed audio has zero pending inference cost in setup inventory',async()=>{
+  const f=fixture();try{
+    await runTranscription(f.cfg,mockOptions(()=> 'completed'));
+    const stats=await inventoryAudio({...f.cfg,transcriptionModel:'gpt-transcribe'});
+    assert.equal(stats.available,1);assert.equal(stats.pending,0);assert.equal(stats.estimatedCostUSD,0);
+    addAudio(f,'forwarded','fake audio bytes');
+    const cache=await inventoryAudio(f.cfg);
+    assert.equal(cache.pending,1);assert.equal(cache.reused,1);assert.equal(cache.estimatedSeconds,0);
+  }finally{rmSync(f.dir,{recursive:true,force:true});}
 });
