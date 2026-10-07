@@ -1,7 +1,7 @@
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdirSync, readFileSync, renameSync, statSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, extname, basename } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { DATA_DIR, type Config, type TranscriptionModel,
   TRANSCRIPTION_MODELS } from '../config.ts';
@@ -63,18 +63,35 @@ export async function availableModels(cfg: Config): Promise<ModelAvailability[]>
 export class TranscriptionError extends Error {
   retryable: boolean;
   pauseModel: boolean;
-  constructor(message: string, retryable: boolean, pauseModel = false) {
+  retryAfterSeconds: number;
+  constructor(message: string, retryable: boolean, pauseModel = false, retryAfterSeconds = 0) {
     super(message);
     this.retryable = retryable;
     this.pauseModel = pauseModel;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 
+const AUDIO_TYPES: Record<string,string> = {
+  '.wav':'audio/wav','.mp3':'audio/mpeg','.mp4':'audio/mp4','.m4a':'audio/mp4',
+  '.mpeg':'audio/mpeg','.mpga':'audio/mpeg','.webm':'audio/webm','.ogg':'audio/ogg','.flac':'audio/flac',
+};
+export function canUploadDirect(path:string,size:number): boolean {
+  return !!AUDIO_TYPES[extname(path).toLowerCase()] && size <= 25_000_000;
+}
+
+/** Injectable transport keeps provider tests offline and cost-free. */
+export interface TranscriptionTransport {
+  fetch?: typeof fetch;
+  sleep?: (ms:number)=>Promise<void>;
+  random?: ()=>number;
+}
+
 export async function transcribeSegment(model: TranscriptionModel, locale: string,
-  wavPath: string, apiKey: string | null): Promise<string> {
+  audioPath: string, apiKey: string | null, transport: TranscriptionTransport = {}): Promise<string> {
   if (model !== 'gpt-transcribe') {
     try {
-      const { stdout } = await exec(appleBinary(), ['transcribe', model, locale, wavPath],
+      const { stdout } = await exec(appleBinary(), ['transcribe', model, locale, audioPath],
         { timeout: 300_000, maxBuffer: 4 * 1024 * 1024 });
       return (JSON.parse(stdout) as { text: string }).text.trim();
     } catch (e) {
@@ -82,46 +99,56 @@ export async function transcribeSegment(model: TranscriptionModel, locale: strin
       throw new TranscriptionError(error.killed
         ? 'Apple transcription timed out after five minutes'
         : 'Apple transcription failed; check Speech permission and language asset',
-      !!error.killed);
+      !!error.killed, !error.killed);
     }
   }
-  if (!apiKey) throw new TranscriptionError('OpenAI API key missing', false);
-  const bytes = readFileSync(wavPath);
-  if (bytes.byteLength > 25_000_000) {
-    throw new TranscriptionError('converted segment exceeds the 25 MB API limit', false);
+  if (!apiKey) throw new TranscriptionError('OpenAI API key missing', false, true);
+  const bytes = readFileSync(audioPath);
+  if (!canUploadDirect(audioPath,bytes.byteLength)) {
+    throw new TranscriptionError('audio format unsupported or file exceeds 25 MB', false);
   }
   const body = new FormData();
   body.append('model', 'gpt-transcribe');
   body.append('languages[]', locale.split('-')[0]);
-  body.append('file', new Blob([bytes], { type: 'audio/wav' }), 'audio.wav');
+  body.append('file', new Blob([bytes], { type: AUDIO_TYPES[extname(audioPath).toLowerCase()] }), basename(audioPath));
+  const send=transport.fetch ?? fetch;
+  const sleep=transport.sleep ?? ((ms:number)=>new Promise<void>(r=>setTimeout(r,ms)));
+  const random=transport.random ?? Math.random;
   for (let attempt = 0; attempt < 2; attempt++) {
     let response: Response;
     try {
-      response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      response = await send('https://api.openai.com/v1/audio/transcriptions', {
         method: 'POST', headers: { Authorization: `Bearer ${apiKey}` }, body,
         signal: AbortSignal.timeout(300_000),
       });
     } catch {
-      if (attempt === 0) continue;
-      throw new TranscriptionError('transcription network/timeout error', true);
+      if (attempt === 0) {await sleep(1000+500*random());continue;}
+      throw new TranscriptionError('transcription network/timeout error', true,true,30);
     }
     if (response.ok) {
       const result = await response.json() as { text?: string };
       if (typeof result.text !== 'string') {
-        throw new TranscriptionError('OpenAI transcription response had no text field', true);
+        throw new TranscriptionError('OpenAI transcription response had no text field', true,true,30);
       }
       return result.text.trim();
     }
+    let code='';
+    try { code=(await response.json() as {error?:{code?:string}}).error?.code ?? ''; } catch { /* no JSON */ }
+    if(response.status===429 && code==='insufficient_quota') {
+      throw new TranscriptionError('OpenAI transcription quota exhausted',false,true);
+    }
     if ([403, 429].includes(response.status) || response.status >= 500) {
-      if (attempt === 0) {
-        await new Promise((r) => setTimeout(r, 1500));
-        continue;
-      }
+      const header=response.headers.get('retry-after');
+      const seconds=header ? (/^\d+(\.\d+)?$/.test(header) ? Number(header) :
+        Math.max(0,(Date.parse(header)-Date.now())/1000)) : 0;
+      const delay=Math.max(Number.isFinite(seconds)?seconds:0,1.5+random());
+      // Persist long waits instead of occupying a worker for minutes.
+      if (attempt === 0 && delay<=30) { await sleep(delay*1000);continue; }
       throw new TranscriptionError(`OpenAI transcription HTTP ${response.status}`,
-        response.status !== 403, response.status === 403);
+        response.status!==403,true,Math.ceil(delay));
     }
     throw new TranscriptionError(`OpenAI transcription HTTP ${response.status}`, false,
       response.status === 401);
   }
-  throw new TranscriptionError('transcription retry exhausted', true);
+  throw new TranscriptionError('transcription retry exhausted', true,true,30);
 }

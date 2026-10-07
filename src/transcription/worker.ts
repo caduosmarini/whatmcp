@@ -152,23 +152,24 @@ function claim(db: DB, row: AudioMediaRow, sha: string,
       lease_until = ?, updated_at = ?, error_code = NULL
     WHERE message_id = ? AND audio_sha256 = ? AND model = ?
       AND model_revision = ? AND locale = ?
+      AND (next_retry_at IS NULL OR next_retry_at <= ?)
       AND (status IN ('pending', 'retryable_error')
         OR (status = 'processing' AND lease_until < ?))
-  `).run(now + LEASE_SECONDS, now, row.message_id, sha, model, REVISION, locale, now);
+  `).run(now + LEASE_SECONDS, now, row.message_id, sha, model, REVISION, locale, now, now);
   return Number(result.changes) === 1;
 }
 
 function setResult(db: DB, row: AudioMediaRow, sha: string,
   model: TranscriptionModel, locale: string, status: string,
-  text: string | null, errorCode: string | null): void {
+  text: string | null, errorCode: string | null, retryAfterSeconds = 0): void {
   db.exec('BEGIN');
   try {
     db.prepare(`
       UPDATE audio_transcripts SET status = ?, text = ?, error_code = ?,
-        lease_until = NULL, updated_at = ?
+        lease_until = NULL, next_retry_at = ?, updated_at = ?
       WHERE message_id = ? AND audio_sha256 = ? AND model = ?
         AND model_revision = ? AND locale = ?
-    `).run(status, text, errorCode, Math.floor(Date.now() / 1000),
+    `).run(status, text, errorCode, retryAfterSeconds ? Math.floor(Date.now()/1000)+retryAfterSeconds : null, Math.floor(Date.now() / 1000),
       row.message_id, sha, model, REVISION, locale);
     markProjectionDirty(db, row.thread_id);
     db.exec('COMMIT');
@@ -261,7 +262,7 @@ export async function runTranscription(cfg: Config, options: {
   try {
     reconcileProjectionModel(db, model, locale);
     if (options.retryErrors) db.prepare(`UPDATE audio_transcripts
-      SET status = 'retryable_error', attempts = 0, error_code = NULL, lease_until = NULL
+      SET status = 'retryable_error', attempts = 0, error_code = NULL, lease_until = NULL, next_retry_at = NULL
       WHERE model = ? AND locale = ? AND status = 'permanent_error'`)
       .run(model, locale);
     await refreshAudioMedia(db,cfg,options);
@@ -351,7 +352,7 @@ export async function runTranscription(cfg: Config, options: {
           .get(row.message_id, sha, model, REVISION, locale) as { n: number }).n);
         setResult(db, row, sha, model, locale,
           error.retryable && attempts < 3 ? 'retryable_error' : 'permanent_error',
-          null, error.message);
+          null, error.message,error.retryAfterSeconds);
         result.failed++;
         say(`audio failed: ${error.message}`);
         if (error.pauseModel) break;
