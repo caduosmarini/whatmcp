@@ -8,6 +8,7 @@ import { runIndex } from '../src/index/indexer.ts';
 import { openStore } from '../src/db/index.ts';
 import { runTranscription, importMediaManifest } from '../src/transcription/worker.ts';
 import { resolveMediaPath, scanSourceMedia } from '../src/transcription/media.ts';
+import { reconcileProjectionModel, prepareReadyCandidates, publishCandidates } from '../src/transcription/projection.ts';
 import { embedMissing } from '../src/index/embed.ts';
 import { transcriptionLanguage, type Config } from '../src/config.ts';
 
@@ -114,7 +115,7 @@ test('model switch retains old active windows until the new result is complete',
     db.close();
     const switched = { ...f.cfg, transcriptionModel: 'apple-dictation' as const };
     const failed = await runTranscription(switched, mockOptions(() => { throw new Error('retry'); }));
-    assert.equal(failed.published, 0);
+    assert.equal(failed.published, 1);
     const interim = openStore(f.store);
     assert.equal((interim.prepare('SELECT text FROM windows').get() as any).text, old);
     interim.close();
@@ -231,4 +232,47 @@ test('incremental media scan discovers paths added or changed below the watermar
     assert.equal((db.prepare('SELECT relative_path FROM audio_media').get() as any).relative_path, 'new.ogg');
     source.close(); db.close();
   } finally { rmSync(f.dir,{recursive:true,force:true}); }
+});
+
+function addAudio(f: ReturnType<typeof fixture>, id: string, bytes = 'different bytes') {
+  const path = `${id}.ogg`;
+  writeFileSync(join(f.mediaRoot,path), bytes);
+  const db = openStore(f.store);
+  db.prepare(`INSERT INTO messages(id,thread_id,ts,kind,is_from_me,first_seen_at)
+    VALUES (?, '123@s.whatsapp.net', 1700000003, 'audio',0,0)`).run(`123@s.whatsapp.net:${id}`);
+  db.prepare('INSERT INTO audio_media(message_id,source_id,relative_path) VALUES (?,?,?)')
+    .run(`123@s.whatsapp.net:${id}`,'import',path);
+  db.close();
+}
+
+test('one failed audio does not block usable transcripts from the same conversation', async () => {
+  const f = fixture();
+  try {
+    addAudio(f,'broken');
+    let n = 0;
+    const result = await runTranscription(f.cfg, {duration: async () => 1,
+      convert: mockOptions(() => '').convert,
+      transcribe: async () => {if(n++ === 0) return 'usable spoken words'; throw new Error('broken');}});
+    assert.equal(result.processed,1);
+    const db = openStore(f.store);
+    assert.match((db.prepare('SELECT text FROM windows').get() as any).text,/usable spoken words/);
+    assert.equal((db.prepare('SELECT pending_audio FROM thread_projection_state').get() as any).pending_audio,1);
+    assert.equal((db.prepare('SELECT status FROM thread_projection_state').get() as any).status,'partial');
+    db.close();
+  } finally {rmSync(f.dir,{recursive:true,force:true});}
+});
+
+test('disabling processing and projecting keeps archived transcripts searchable', async () => {
+  const f = fixture();
+  try {
+    await runTranscription(f.cfg,mockOptions(() => 'archived words'));
+    const db = openStore(f.store);
+    const before=db.prepare('SELECT text,content_hash FROM windows').all();
+    const disabled={...f.cfg,transcriptionModel:null};
+    reconcileProjectionModel(db,null);
+    prepareReadyCandidates(db,disabled);publishCandidates(db,disabled);
+    assert.deepEqual(db.prepare('SELECT text,content_hash FROM windows').all(),before);
+    assert.equal((db.prepare('SELECT COUNT(*) n FROM active_transcripts').get() as any).n,1);
+    db.close();
+  } finally {rmSync(f.dir,{recursive:true,force:true});}
 });

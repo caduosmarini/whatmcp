@@ -14,7 +14,7 @@ import { prepareReadyCandidates, publishCandidates,
   reconcileProjectionModel } from './projection.ts';
 
 const exec = promisify(execFile);
-const REVISION = 'v1';
+import { TRANSCRIPTION_REVISION as REVISION } from './identity.ts';
 const LEASE_SECONDS = 5 * 60;
 const SEGMENT_SECONDS = 10 * 60; // 16 kHz mono WAV stays below 25 MB.
 
@@ -170,7 +170,7 @@ function setResult(db: DB, row: AudioMediaRow, sha: string,
         AND model_revision = ? AND locale = ?
     `).run(status, text, errorCode, Math.floor(Date.now() / 1000),
       row.message_id, sha, model, REVISION, locale);
-    if (status === 'done' || status === 'no_speech') markProjectionDirty(db, row.thread_id);
+    markProjectionDirty(db, row.thread_id);
     db.exec('COMMIT');
   } catch (e) {
     db.exec('ROLLBACK');

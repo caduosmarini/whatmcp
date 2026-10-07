@@ -5,7 +5,7 @@ import { replaceThreadWindows } from '../index/indexer.ts';
 import { invalidate } from '../store.ts';
 import type { Config } from '../config.ts';
 import type { DB } from '../db/index.ts';
-import { mediaPath } from './media.ts';
+import { TRANSCRIPTION_REVISION } from './identity.ts';
 
 interface SelectedTranscript {
   message_id: string;
@@ -60,15 +60,15 @@ export function reconcileProjectionModel(db: DB, model: string | null, locale = 
   db.exec('BEGIN');
   try {
     db.prepare(`
-      INSERT OR IGNORE INTO thread_projection_state(thread_id, desired_model, desired_locale, updated_at)
-      SELECT DISTINCT thread_id, ?, ?, ? FROM messages WHERE kind = 'audio'
-    `).run(model, locale, now);
+      INSERT OR IGNORE INTO thread_projection_state(thread_id, desired_model, desired_locale, desired_revision, updated_at)
+      SELECT DISTINCT thread_id, ?, ?, ?, ? FROM messages WHERE kind = 'audio'
+    `).run(model, locale, TRANSCRIPTION_REVISION, now);
     db.prepare(`
       UPDATE thread_projection_state SET
-        desired_model = ?, desired_locale = ?, desired_generation = desired_generation + 1,
+        desired_model = ?, desired_locale = ?, desired_revision = ?, desired_generation = desired_generation + 1,
         status = 'dirty', updated_at = ?
-      WHERE desired_model IS NOT ? OR desired_locale IS NOT ?
-    `).run(model, locale, now, model, locale);
+      WHERE desired_model IS NOT ? OR desired_locale IS NOT ? OR desired_revision IS NOT ?
+    `).run(model, locale, TRANSCRIPTION_REVISION, now, model, locale, TRANSCRIPTION_REVISION);
     db.exec('COMMIT');
   } catch (e) {
     db.exec('ROLLBACK');
@@ -81,73 +81,61 @@ interface State {
   desired_generation: number;
   desired_model: string | null;
   active_model: string | null;
+  desired_locale: string;
+  desired_revision: string;
+  pending_audio: number;
 }
 
-/** Build candidates only when every accessible audio has a usable result. */
+/** Publish usable results without waiting for unrelated failures in the chat. */
 export function prepareReadyCandidates(db: DB, cfg: Config, limit = 25): number {
   const states = db.prepare(`
-    SELECT thread_id, desired_generation, desired_model, active_model
-    FROM thread_projection_state
+    SELECT * FROM thread_projection_state
     WHERE desired_generation > active_generation AND status <> 'prepared'
-    ORDER BY updated_at, thread_id
-  `).all() as State[];
+    ORDER BY updated_at, thread_id LIMIT ?
+  `).all(limit) as State[];
   let prepared = 0;
-  for (const state of states) {
-    if (prepared >= limit) break;
-    const model = state.desired_model;
-    // A disabled installation with no previously published transcript has
-    // nothing to reproject; keep its original text windows intact.
-    if (!model && !state.active_model) {
-      db.prepare(`UPDATE thread_projection_state SET active_generation = desired_generation,
-        status = 'current' WHERE thread_id = ?`).run(state.thread_id);
-      continue;
-    }
-    const picks: SelectedTranscript[] = [];
-    let ready = true;
-    const media = db.prepare(`
-      SELECT a.message_id, a.source_id, a.relative_path, a.sha256,
-             a.availability, m.thread_id
-      FROM audio_media a JOIN messages m ON m.id = a.message_id
-      WHERE m.thread_id = ?
-    `).all(state.thread_id) as {
-      message_id: string; source_id: string; relative_path: string;
-      sha256: string | null; availability: string; thread_id: string }[];
-    for (const row of media) {
-      if (!model) continue;
-      let available = false;
-      try { mediaPath(cfg, row); available = true; } catch { /* absent or unsafe */ }
-      const availability = available ? 'available' : 'unavailable';
-      if (availability !== row.availability) {
-        db.prepare('UPDATE audio_media SET availability = ?, checked_at = ? WHERE message_id = ?')
-          .run(availability, Math.floor(Date.now() / 1000), row.message_id);
-      }
-      if (!available) {
-        const old = db.prepare(`
-          SELECT a.*, t.text FROM active_transcripts a JOIN audio_transcripts t
-            ON t.message_id = a.message_id AND t.audio_sha256 = a.audio_sha256
-            AND t.model = a.model AND t.model_revision = a.model_revision
-            AND t.locale = a.locale WHERE a.message_id = ? AND t.status = 'done'
-        `).get(row.message_id) as SelectedTranscript | undefined;
-        if (old) picks.push(old);
-        continue;
-      }
-      if (!row.sha256) { ready = false; continue; }
-      const result = db.prepare(`
-        SELECT message_id, audio_sha256, model, model_revision, locale, text, status
-        FROM audio_transcripts WHERE message_id = ? AND audio_sha256 = ?
-          AND model = ? AND model_revision = 'v1' AND locale = ?
-      `).get(row.message_id, row.sha256, model, cfg.transcriptionDefaultLanguage ?? 'pt-BR') as
-        (SelectedTranscript & { status: string }) | undefined;
-      if (!result || !['done', 'no_speech'].includes(result.status)) {
-        ready = false;
-      } else if (result.status === 'done') {
-        picks.push(result);
-      }
-    }
-    if (!ready) continue;
-
-    db.exec('BEGIN');
+  for (const initial of states) {
+    db.exec('BEGIN IMMEDIATE');
     try {
+      const state = db.prepare('SELECT * FROM thread_projection_state WHERE thread_id = ?')
+        .get(initial.thread_id) as State;
+      if (state.desired_generation !== initial.desired_generation) {
+        db.exec('ROLLBACK'); continue;
+      }
+      const picks: SelectedTranscript[] = [];
+      let pending = 0;
+      const media = db.prepare(`
+        SELECT m.id message_id, a.sha256, a.availability FROM messages m
+        LEFT JOIN audio_media a ON a.message_id = m.id
+        WHERE m.thread_id = ? AND m.kind = 'audio'
+      `).all(state.thread_id) as {
+        message_id: string; sha256: string | null; availability: string | null }[];
+      const prior = db.prepare(`
+        SELECT a.*, t.text, t.status FROM active_transcripts a JOIN audio_transcripts t
+          ON t.message_id = a.message_id AND t.audio_sha256 = a.audio_sha256
+          AND t.model = a.model AND t.model_revision = a.model_revision AND t.locale = a.locale
+        WHERE a.message_id = ? AND t.status IN ('done','no_speech')
+      `);
+      const requested = db.prepare(`
+        SELECT * FROM audio_transcripts WHERE message_id = ? AND audio_sha256 = ?
+          AND model = ? AND model_revision = ? AND locale = ?
+      `);
+      for (const row of media) {
+        const old = prior.get(row.message_id) as SelectedTranscript | undefined;
+        // Turning processing off never removes an already archived transcript.
+        if (!state.desired_model) { if (old) picks.push(old); continue; }
+        const target = row.sha256 ? requested.get(row.message_id, row.sha256,
+          state.desired_model, state.desired_revision, state.desired_locale) as
+          (SelectedTranscript & { status: string }) | undefined : undefined;
+        if (target && ['done','no_speech'].includes(target.status)) {
+          picks.push(target);
+        } else {
+          if (old) picks.push(old);
+          // A default-model change alone does not invalidate usable old work.
+          // An explicit pending replacement or a changed/missing file does.
+          if (target || !old || old.audio_sha256 !== row.sha256) pending++;
+        }
+      }
       db.prepare('DELETE FROM candidate_transcripts WHERE thread_id = ?').run(state.thread_id);
       db.prepare('DELETE FROM candidate_windows WHERE thread_id = ?').run(state.thread_id);
       const insTranscript = db.prepare(`
@@ -168,9 +156,9 @@ export function prepareReadyCandidates(db: DB, cfg: Config, limit = 25): number 
         state.desired_generation, ordinal, w.start_ts, w.end_ts, w.msg_count,
         w.speakers, w.text, w.first_msg_id, w.last_msg_id, windowHash(w),
         JSON.stringify(w.parts)));
-      db.prepare(`UPDATE thread_projection_state SET status = 'prepared'
+      db.prepare(`UPDATE thread_projection_state SET status = 'prepared', pending_audio = ?
         WHERE thread_id = ? AND desired_generation = ?`)
-        .run(state.thread_id, state.desired_generation);
+        .run(pending, state.thread_id, state.desired_generation);
       db.exec('COMMIT');
       prepared++;
     } catch (e) {
@@ -184,7 +172,7 @@ export function prepareReadyCandidates(db: DB, cfg: Config, limit = 25): number 
 /** One transaction switches FTS, active transcript selection, and generation. */
 export function publishCandidates(db: DB, cfg: Config, limit = 25): number {
   const states = db.prepare(`
-    SELECT thread_id, desired_generation, desired_model FROM thread_projection_state
+    SELECT * FROM thread_projection_state
     WHERE status = 'prepared' AND desired_generation > active_generation
     ORDER BY updated_at, thread_id LIMIT ?
   `).all(limit) as State[];
@@ -221,7 +209,7 @@ export function publishCandidates(db: DB, cfg: Config, limit = 25): number {
       db.prepare(`UPDATE thread_projection_state SET active_generation = ?,
         active_model = ?, status = ?, updated_at = ? WHERE thread_id = ?`)
         .run(state.desired_generation, state.desired_model,
-          missing ? 'vectors_pending' : 'current', Math.floor(Date.now() / 1000),
+          state.pending_audio ? 'partial' : missing ? 'vectors_pending' : 'current', Math.floor(Date.now() / 1000),
           state.thread_id);
       db.prepare('DELETE FROM candidate_windows WHERE thread_id = ?').run(state.thread_id);
       db.prepare('DELETE FROM candidate_transcripts WHERE thread_id = ?').run(state.thread_id);
