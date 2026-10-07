@@ -83,7 +83,7 @@ test('loaded vectors and an empty vector index are cached', async () => {
   });
 });
 
-test('WAL writes and main database changes invalidate vector caches', async () => {
+test('index writes invalidate vectors while checkpoints retain the matrix', async () => {
   await fixture((f) => {
     const empty = f.get();
     assert.equal(empty.vectors, null);
@@ -99,7 +99,7 @@ test('WAL writes and main database changes invalidate vector caches', async () =
     utimesSync(f.path, before.atime, new Date(before.mtimeMs + 2000));
     const checkpointed = f.get();
     assert.notStrictEqual(checkpointed, updated);
-    assert.notStrictEqual(checkpointed.vectors, oldVectors);
+    assert.strictEqual(checkpointed.vectors, oldVectors);
     assert.equal(checkpointed.vectors?.n, 1);
   });
 });
@@ -135,5 +135,18 @@ test('archive status reuses one stats snapshot without loading vectors', async (
       await client.close();
       await server.close();
     }
+  });
+});
+
+ test('progress writes retain an unloaded cache without parsing malformed vectors', async () => {
+  await fixture((f) => {
+    f.vector(new Uint8Array(1));
+    const before = f.get();
+    f.writer.exec("INSERT INTO messages(id,thread_id,ts,kind,is_from_me,first_seen_at) VALUES('m','synthetic',1,'audio',0,1)");
+    invalidate();
+    const after = f.get();
+    assert.notEqual(after, before);
+    assert.equal(stats(f.ctx).windows, 1);
+    assert.throws(() => after.vectors, /vector is 1 bytes/);
   });
 });
