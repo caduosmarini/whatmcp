@@ -136,8 +136,9 @@ Read tools query the existing archive without triggering collection; request
 
 ## Validation
 
-CI runs the synthetic/offline suite on macOS and Windows, including PowerShell
-syntax and the Windows subprocess protocol. The native Apple speech smoke check
+Run `npm test` on each platform. The synthetic/offline suite includes
+PowerShell syntax and the subprocess protocol when running on Windows;
+platform-specific checks are skipped on macOS. The native Apple speech smoke check
 is separate and opt-in. These checks do not exercise a live encrypted WhatsApp
 package, a real WAren6 acquisition, Windows account credentials, or a paid audio
 API request. Validate one real collection under the intended Windows service or
