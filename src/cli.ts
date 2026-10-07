@@ -23,7 +23,7 @@ import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { listClients, revokeClient } from './mcp/oauth.ts';
 import { runSetup, installSyncAgent, disableSyncAgent } from './setup.ts';
-import { runPreflight } from './preflight.ts';
+import { runConfiguredPreflight } from './preflight.ts';
 import { dirname, join, resolve } from 'node:path';
 import { readSecret } from './secret-input.ts';
 import { runSyncProcess, syncWorkerCommand, syncTimeoutMs } from './sync-process.ts';
@@ -533,7 +533,7 @@ switch (cmd) {
 
     console.log(bold('\nenvironment'));
     let blocked = false;
-    for (const c of runPreflight(cfg.chatstorage)) {
+    for (const c of runConfiguredPreflight(cfg)) {
       console.log(`  ${c.ok ? '\x1b[32m✓\x1b[0m' : '\x1b[31m✗\x1b[0m'} ${c.label}: ${c.detail}`);
       if (!c.ok && c.fix) {
         console.log(c.fix.split('\n').map((l) => '      ' + l).join('\n'));
@@ -542,7 +542,7 @@ switch (cmd) {
     }
 
     const src = wa.sourceInfo(cfg.chatstorage);
-    if (src.exists && !blocked) {
+    if (cfg.sourceType !== 'windows-waren6' && src.exists && !blocked) {
       console.log(`  path:    ${cfg.chatstorage}`);
       console.log(`  size:    ${fmtBytes(src.size)}, modified ${fmtTs(src.mtime)}`);
       let snap: string | null = null;
