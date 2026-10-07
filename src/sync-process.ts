@@ -2,12 +2,12 @@ import { spawn } from 'node:child_process';
 import { constants } from 'node:os';
 import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { DATA_DIR } from './config.ts';
+import { DATA_DIR, resolveSyncTimeoutMinutes } from './config.ts';
 
-export const SYNC_TIMEOUT_MS = 5 * 60 * 1000;
-export const WINDOWS_SYNC_TIMEOUT_MS = 30 * 60 * 1000;
-export function syncTimeoutMs(sourceType: string): number {
-  return sourceType === 'windows-waren6' ? WINDOWS_SYNC_TIMEOUT_MS : SYNC_TIMEOUT_MS;
+export const SYNC_TIMEOUT_MS = resolveSyncTimeoutMinutes(undefined, 'chatstorage') * 60_000;
+export const WINDOWS_SYNC_TIMEOUT_MS = resolveSyncTimeoutMinutes(undefined, 'windows-waren6') * 60_000;
+export function syncTimeoutMs(sourceType: string, minutes?: number): number {
+  return resolveSyncTimeoutMinutes(minutes, sourceType) * 60_000;
 }
 const STOP_GRACE_MS = 5 * 1000;
 export const SYNC_PAUSE_PATH = join(DATA_DIR, 'sync-paused.json');
@@ -34,11 +34,12 @@ function pauseScheduledSync(path: string): void {
   chmodSync(path, 0o600);
 }
 
-export function syncWorkerCommand(full = false): [string, string[]] {
+export function syncWorkerCommand(full = false, indexOnly = false): [string, string[]] {
   return [process.execPath, [
     '--experimental-sqlite', '--experimental-strip-types', '--no-warnings',
     join(import.meta.dirname, 'cli.ts'), 'sync-worker',
     ...(full ? ['--full'] : []),
+    ...(indexOnly ? ['--index-only'] : []),
   ]];
 }
 

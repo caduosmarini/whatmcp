@@ -27,6 +27,7 @@ import { runConfiguredPreflight } from './preflight.ts';
 import { dirname, join, resolve } from 'node:path';
 import { readSecret } from './secret-input.ts';
 import { runSyncProcess, syncWorkerCommand, syncTimeoutMs } from './sync-process.ts';
+import { runScheduledSync } from './scheduled-sync.ts';
 import { tryAcquireSyncLock } from './sync-lock.ts';
 import { availableModels } from './transcription/models.ts';
 import { importMediaManifest, runTranscription, scanConfiguredSource } from './transcription/worker.ts';
@@ -359,6 +360,7 @@ switch (cmd) {
     console.log(`transcription: ${result.processed} done, ${result.noSpeech} without speech, ` +
       `${result.reused} reused, ${result.unavailable} unavailable, ${result.failed} failed; ` +
       `${result.prepared} conversation(s) prepared, ${result.published} published`);
+    if(result.failed>0)process.exitCode=1;
     break;
   }
 
@@ -396,9 +398,15 @@ switch (cmd) {
     break;
   }
 
+  case 'scheduled-sync': {
+    process.exitCode=await runScheduledSync(loadConfig());
+    break;
+  }
+
   case 'sync': {
     const [command, args] = syncWorkerCommand(flag('full'));
-    process.exitCode = await runSyncProcess(command, args, { scheduled: flag('scheduled'), timeoutMs: syncTimeoutMs(loadConfig().sourceType) });
+    const cfg = loadConfig();
+    process.exitCode = await runSyncProcess(command, args, { scheduled: flag('scheduled'), timeoutMs: syncTimeoutMs(cfg.sourceType, cfg.syncTimeoutMinutes) });
     break;
   }
 
@@ -429,7 +437,9 @@ switch (cmd) {
             `${r.windowsBuilt} window(s) built  (${r.totalMessages} archived)`,
         );
       }
-      if (ec) {
+      if (flag('index-only')) {
+        console.log('embedding deferred until after scheduled transcription');
+      } else if (ec) {
         console.log(bold('embedding'));
         const result = await embedMissing(cfg.store, ec, { onProgress });
         if (result.failed > 0) throw new Error(`${result.failed} embedding window(s) remain pending after API rejection; retry sync.`);

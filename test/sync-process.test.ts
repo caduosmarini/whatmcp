@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runSyncProcess, syncTimeoutMs, syncWorkerCommand } from '../src/sync-process.ts';
@@ -39,9 +40,31 @@ test('sync watchdog preserves successful exit', async () => {
 
  test('Windows timeout and sync worker preserve platform policy', () => {
    assert.equal(syncTimeoutMs('windows-waren6'), 30 * 60000);
-   assert.equal(syncTimeoutMs('chatstorage'), 5 * 60000);
+   assert.equal(syncTimeoutMs('chatstorage'), 10 * 60000);
+   assert.equal(syncTimeoutMs('chatstorage', 17), 17 * 60000);
+   assert.equal(syncTimeoutMs('windows-waren6', 45), 45 * 60000);
    assert.ok(!syncWorkerCommand(false)[1].includes('--index-only'));
  });
+
+test('sync timeout rejects settings that would disable its watchdog', () => {
+  for (const value of [0, -1, NaN, Infinity, 1e8, '10', null]) {
+    assert.throws(() => syncTimeoutMs('chatstorage', value as number), /sync_timeout_minutes/);
+  }
+});
+
+test('file config supplies the default and custom watchdog budget', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'whatmcp-sync-config-'));
+  t.after(() => rmSync(dir, {recursive:true,force:true}));
+  const script = `import {loadConfig} from './src/config.ts';
+    import {syncTimeoutMs} from './src/sync-process.ts';
+    const cfg=loadConfig(); console.log(syncTimeoutMs(cfg.sourceType,cfg.syncTimeoutMinutes));`;
+  const read = () => Number(execFileSync(process.execPath,
+    ['--experimental-strip-types','--no-warnings','--input-type=module','-e',script],
+    {cwd:join(import.meta.dirname,'..'),env:{...process.env,WHATMCP_HOME:dir,WHATMCP_SOURCE_TYPE:'chatstorage'},encoding:'utf8'}).trim());
+  assert.equal(read(),600000);
+  writeFileSync(join(dir,'config.json'),JSON.stringify({sync_timeout_minutes:12.5}));
+  assert.equal(read(),750000);
+});
 
 test('Windows watchdog terminates descendants of its worker', { skip: process.platform !== 'win32' }, async t => {
   const dir = mkdtempSync(join(tmpdir(), 'whatmcp-tree-'));
