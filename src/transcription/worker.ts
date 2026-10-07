@@ -297,19 +297,21 @@ export async function runTranscription(cfg: Config, options: {
       }
     };
     let completedSincePublish=0;
-    for (const row of rows) {
-      if (result.processed + result.failed >= (options.limit ?? Infinity)) break;
-      if (row.availability !== 'available' || !row.sha256) {result.unavailable++;continue;}
+    let started=0, paused=false;
+    const processAudio = async (row:AudioMediaRow):Promise<void> => {
+      if(paused || started >= (options.limit ?? Infinity))return;
+      if (row.availability !== 'available' || !row.sha256) {return;}
       const sha=row.sha256;
       const existing=target.get(row.message_id,sha,model,REVISION,locale) as {status:string}|undefined;
-      if (!existing && historical.get(row.message_id,sha) && !options.reprocess) continue;
-      if (!claim(db,row,sha,model,locale)) continue;
+      if (!existing && historical.get(row.message_id,sha) && !options.reprocess) return;
+      if (!claim(db,row,sha,model,locale)) return;
+      started++;
       const copy=cached.get(sha,model,REVISION,locale) as {text:string|null;status:string}|undefined;
       if(copy) {
         setResult(db,row,sha,model,locale,copy.status,copy.text,null);
         result.processed++;result.reused++;if(copy.status==='no_speech')result.noSpeech++;
         if(++completedSincePublish>=25){flush();completedSincePublish=0;}
-        continue;
+        return;
       }
       const path=mediaPath(cfg,row);
       const tempDir = mkdtempSync(join(tmpdir(), 'whatmcp-audio-'));
@@ -373,12 +375,30 @@ export async function runTranscription(cfg: Config, options: {
           null, error.message,error.retryAfterSeconds);
         result.failed++;
         say(`audio failed: ${error.message}`);
-        if (error.pauseModel) break;
+        if (error.pauseModel) paused=true;
       } finally {
         rmSync(tempDir, { recursive: true, force: true });
       }
       if(completedSincePublish>=25){flush();completedSincePublish=0;}
+    };
+    result.unavailable=rows.filter(row=>row.availability!=='available').length;
+    // A single group owns each hash, so concurrent forwards cannot duplicate API work.
+    const grouped=new Map<string,AudioMediaRow[]>();
+    for(const row of rows)if(row.sha256 && row.availability==='available'){
+      const group=grouped.get(row.sha256) ?? [];group.push(row);grouped.set(row.sha256,group);
     }
+    const groups=[...grouped.values()];let next=0;
+    const concurrency=model==='gpt-transcribe' ? cfg.transcriptionConcurrency ?? 2 : 1;
+    if(!Number.isInteger(concurrency)||concurrency<1||concurrency>4)throw new Error('Invalid transcription concurrency');
+    const tasks=Array.from({length:concurrency},async()=>{
+      while(!paused && next<groups.length && started<(options.limit ?? Infinity)){
+        const group=groups[next++];
+        for(const row of group)await processAudio(row);
+      }
+    });
+    const settled=await Promise.allSettled(tasks);
+    const failed=settled.find(r=>r.status==='rejected');
+    if(failed?.status==='rejected')throw failed.reason;
     flush();
     return result;
   } finally {

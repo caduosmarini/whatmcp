@@ -342,3 +342,17 @@ test('GPT sends a supported short source directly and stores a reproducible segm
     assert.deepEqual(JSON.parse(t.segment_plan),[{start:0,end:20}]);db.close();
   }finally{rmSync(f.dir,{recursive:true,force:true});}
 });
+
+test('cloud concurrency is bounded, deduplicates forwards and respects the batch limit',async()=>{
+  const f=fixture();try{
+    addAudio(f,'forwarded','fake audio bytes');addAudio(f,'other','another audio');addAudio(f,'third','third audio');
+    let inFlight=0,max=0,calls=0;
+    const cfg={...f.cfg,transcriptionModel:'gpt-transcribe' as const,transcriptionConcurrency:2};
+    const adapter={duration:async()=>1,transcribe:async()=>{
+      calls++;max=Math.max(max,++inFlight);await new Promise(r=>setTimeout(r,5));inFlight--;return 'cloud words';}};
+    const first=await runTranscription(cfg,{...adapter,limit:1});
+    assert.equal(first.processed,1);assert.equal(calls,1);
+    const next=await runTranscription(cfg,adapter);
+    assert.equal(next.processed,3);assert.equal(next.reused,1);assert.equal(calls,3);assert.equal(max,2);
+  }finally{rmSync(f.dir,{recursive:true,force:true});}
+});

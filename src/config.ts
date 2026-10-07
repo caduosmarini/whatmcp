@@ -45,6 +45,7 @@ export interface FileConfig {
   min_sim?: number;
   strong_sim?: number;
   transcription_model?: TranscriptionModel | null;
+  transcription_concurrency?: number;
   transcription_default_language?: string;
   /** Legacy name accepted when the new setting is absent. */
   transcription_locale?: string;
@@ -115,6 +116,7 @@ export interface Config {
   /** Background sync cadence in hours; 0 means manual only. */
   syncIntervalHours: number;
   transcriptionModel?: TranscriptionModel | null;
+  transcriptionConcurrency?: number;
   transcriptionDefaultLanguage?: string;
   mediaSourceId?: string;
   mediaRoots?: Record<string, string>;
@@ -143,6 +145,10 @@ export function loadConfig(): Config {
   if (f.transcription_model != null && !TRANSCRIPTION_MODELS.includes(f.transcription_model)) {
     throw new Error(`Unknown transcription_model: ${f.transcription_model}`);
   }
+  const concurrency = f.transcription_concurrency ?? 2;
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 4) {
+    throw new Error('transcription_concurrency must be an integer between 1 and 4');
+  }
   const model = process.env.WHATMCP_OPENAI_MODEL ?? f.openai_model ?? 'text-embedding-3-small';
   const dims = Number(
     process.env.WHATMCP_OPENAI_DIMS ?? f.openai_dims ?? NATIVE_DIMS[model] ?? 1536,
@@ -157,6 +163,7 @@ export function loadConfig(): Config {
     strongSim: f.strong_sim,
     syncIntervalHours: Number(f.sync_interval_hours ?? 0),
     transcriptionModel: f.transcription_model ?? null,
+    transcriptionConcurrency: concurrency,
     transcriptionDefaultLanguage: transcriptionLanguage(f),
     mediaSourceId: f.media_source_id ??
       (process.platform === 'darwin' && (f.chatstorage ?? DEFAULT_CHATSTORAGE) === DEFAULT_CHATSTORAGE
