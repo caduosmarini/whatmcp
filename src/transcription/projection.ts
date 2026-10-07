@@ -48,7 +48,7 @@ export function projectionInputs(db: DB, threadId: string,
   return rows.flatMap((row) => {
     const original = row.text?.trim() ?? '';
     const transcript = transcripts.get(row.message_id);
-    const derived = transcript ? `Áudio transcrito (${transcript.model}): ${transcript.text}` : '';
+    const derived = transcript ? `Áudio transcrito: ${transcript.text}` : '';
     const text = [original, derived].filter(Boolean).join('\n');
     return text ? [{ ...row, text }] : [];
   });

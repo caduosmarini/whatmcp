@@ -8,6 +8,7 @@ import { runIndex } from '../src/index/indexer.ts';
 import { openStore } from '../src/db/index.ts';
 import { runTranscription, importMediaManifest } from '../src/transcription/worker.ts';
 import { resolveMediaPath, scanSourceMedia, hashFile } from '../src/transcription/media.ts';
+import {getConversation,searchHybrid} from '../src/search/search.ts';
 import {TRANSCRIPTION_REVISION} from '../src/transcription/identity.ts';
 import {segmentBoundaries} from '../src/transcription/segments.ts';
 import { reconcileProjectionModel, prepareReadyCandidates, publishCandidates } from '../src/transcription/projection.ts';
@@ -72,7 +73,7 @@ test('audio enters its chronological position; re-running keeps the same windows
     const first = db.prepare('SELECT id, text, content_hash FROM windows').all() as
       { id: number; text: string; content_hash: string }[];
     assert.equal(first.length, 1);
-    assert.match(first[0].text, /antes.*legenda Áudio transcrito \(apple-speech\): fala um fala dois.*depois/s);
+    assert.match(first[0].text, /antes.*legenda Áudio transcrito: fala um fala dois.*depois/s);
     assert.equal(Number((db.prepare('SELECT COUNT(*) n FROM window_message_parts').get() as any).n), 3);
     assert.equal(Number((db.prepare("SELECT COUNT(*) n FROM windows_fts WHERE windows_fts MATCH 'fala'").get() as any).n), 1);
     db.close();
@@ -355,4 +356,43 @@ test('cloud concurrency is bounded, deduplicates forwards and respects the batch
     const next=await runTranscription(cfg,adapter);
     assert.equal(next.processed,3);assert.equal(next.reused,1);assert.equal(calls,3);assert.equal(max,2);
   }finally{rmSync(f.dir,{recursive:true,force:true});}
+});
+
+test('identical words from a different engine retain their embedding hash and expose provenance',async()=>{
+  const f=fixture();try{
+    await runTranscription(f.cfg,mockOptions(()=> 'same words'));
+    const db=openStore(f.store);const before=db.prepare('SELECT content_hash FROM windows').all();db.close();
+    await runTranscription({...f.cfg,transcriptionModel:'apple-dictation'}, {...mockOptions(()=> 'same words'),reprocess:true});
+    const next=openStore(f.store);assert.deepEqual(next.prepare('SELECT content_hash FROM windows').all(),before);next.close();
+    const msgs=getConversation({storePath:f.store,embedCfg:{model:f.cfg.openaiModel,dimensions:1536,apiKey:'unused'}},{thread_id:'123@s.whatsapp.net'});
+    const voice=msgs.find(m=>m.kind==='audio')!;
+    assert.equal(voice.transcription_model,'apple-dictation');assert.equal(voice.transcription_language,'pt-BR');
+  }finally{rmSync(f.dir,{recursive:true,force:true});}
+});
+test('failed audio state and valid transcript are visible through conversation reads and FTS',async()=>{
+  const f=fixture();try{
+    addAudio(f,'broken');let n=0;
+    await runTranscription(f.cfg,{duration:async()=>1,convert:mockOptions(()=> '').convert,transcribe:async()=>{
+      if(n++===0)return 'localizar reunião';throw new Error('failed');}});
+    const ctx={storePath:f.store,embedCfg:{model:f.cfg.openaiModel,dimensions:1536,apiKey:'unused'}};
+    const msgs=getConversation(ctx,{thread_id:'123@s.whatsapp.net'});
+    assert.equal(msgs.find(m=>m.id.endsWith(':broken'))?.transcription_status,'retryable_error');
+    assert.equal((await searchHybrid(ctx,{query:'reunião',mode:'bm25'})).hits.length,1);
+  }finally{rmSync(f.dir,{recursive:true,force:true});}
+});
+
+test('partial vector coverage is reported when only some published windows have embeddings',async()=>{
+  const f=fixture();const original=globalThis.fetch;
+  try {
+    await runTranscription(f.cfg,{...mockOptions(()=> 'reunião '.repeat(700))});
+    const db=openStore(f.store);
+    const rows=db.prepare('SELECT content_hash FROM windows').all() as {content_hash:string}[];
+    assert.ok(rows.length>1);
+    const vector=new Float32Array(1536);vector[0]=1;
+    db.prepare('INSERT INTO window_vectors(content_hash,model,dim,created_at,vec) VALUES (?, ?,1536,0,?)')
+      .run(rows[0].content_hash,'openai/text-embedding-3-small@1536',new Uint8Array(vector.buffer));db.close();
+    globalThis.fetch=async()=>new Response(JSON.stringify({data:[{index:0,embedding:Array.from(vector)}],usage:{total_tokens:1}}));
+    const result=await searchHybrid({storePath:f.store,embedCfg:{model:f.cfg.openaiModel,dimensions:1536,apiKey:'test'}},{query:'reunião'});
+    assert.match(result.degraded!,/coverage is incomplete/);assert.ok(result.hits.length);
+  }finally{globalThis.fetch=original;rmSync(f.dir,{recursive:true,force:true});}
 });

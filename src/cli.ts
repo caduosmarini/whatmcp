@@ -550,7 +550,7 @@ switch (cmd) {
       const audio = mediaStats(getStore(cfg.store,
         modelTag({ model: cfg.openaiModel, dimensions: cfg.openaiDims })).db);
       console.log(`  audio: ${audio.available}/${audio.referenced} available; ` +
-        `${audio.done} transcript(s), ${audio.pendingThreads} conversation(s) pending publication`);
+        `${audio.done} message(s) with transcripts, ${audio.pendingAudio} audio(s) pending; ${audio.pendingThreads} conversation(s) pending publication`);
       if (audio.lastError) console.log(`  audio last error: ${audio.lastError}`);
     }
     break;

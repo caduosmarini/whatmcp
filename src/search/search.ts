@@ -297,6 +297,14 @@ export async function searchHybrid(ctx: SearchContext, p: HybridParams): Promise
     if (mode === 'vector') return { hits: [], degraded, strongCount: 0 };
   }
 
+  if(mode!=='bm25' && ix){
+    const filters=filterClauses(p);
+    const missing=Number((db.prepare(`SELECT COUNT(*) n FROM windows w JOIN threads t ON t.id=w.thread_id
+      LEFT JOIN window_vectors v ON v.content_hash=w.content_hash AND v.model=?
+      WHERE v.content_hash IS NULL${filters.sql.length ? ' AND '+filters.sql.join(' AND ') : ''}`)
+      .get(tag,...filters.args) as {n:number}).n);
+    if(missing)degraded=`${missing} published window(s) lack vectors for this model; semantic coverage is incomplete.`;
+  }
   const bm25Raw = mode === 'vector' ? [] : bm25Arm(db, p, topK);
 
   let vecHits: { window_id: number; sim: number }[] = [];
@@ -392,13 +400,16 @@ export interface Msg {
   is_from_me: number;
   transcription_text?: string | null;
   transcription_model?: string | null;
+  transcription_language?: string | null;
+  transcription_stale?: boolean;
   transcription_status?: string | null;
   index_pending?: boolean;
 }
 
 function withTranscripts<T extends Msg>(db: DB, rows: T[]): T[] {
   const transcript = db.prepare(`
-    SELECT t.text, t.model, t.status,
+    SELECT t.text, t.model, t.locale, t.status,
+      CASE WHEN media.sha256 IS NOT NULL AND media.sha256 <> t.audio_sha256 THEN 1 ELSE 0 END stale,
       CASE WHEN active.message_id IS NOT NULL THEN 1 ELSE 0 END is_active
     FROM audio_transcripts t
     LEFT JOIN audio_media media ON media.message_id = t.message_id
@@ -407,21 +418,31 @@ function withTranscripts<T extends Msg>(db: DB, rows: T[]): T[] {
       AND active.model_revision = t.model_revision AND active.locale = t.locale
     WHERE t.message_id = ? AND t.status IN ('done', 'no_speech')
       AND (t.audio_sha256 = media.sha256 OR active.message_id IS NOT NULL)
-    ORDER BY CASE WHEN t.audio_sha256 = media.sha256 THEN 0 ELSE 1 END,
-      t.updated_at DESC LIMIT 1
+    ORDER BY CASE WHEN active.message_id IS NOT NULL THEN 0 ELSE 1 END,
+      t.updated_at DESC, t.model, t.locale LIMIT 1
   `);
-  const state = db.prepare(`SELECT desired_generation, active_generation
+  const state = db.prepare(`SELECT desired_generation, active_generation, pending_audio
     FROM thread_projection_state WHERE thread_id = ?`);
   return rows.map((row) => {
     const t = transcript.get(row.id) as {
-      text: string | null; model: string; status: string; is_active: number } | undefined;
-    if (!t) return row;
+      text: string | null; model: string; locale: string; status: string; is_active: number; stale:number } | undefined;
+    if (!t) {
+      if(row.kind!=='audio')return row;
+      const missing=db.prepare(`SELECT a.availability,t.status,s.desired_model model FROM messages m
+        LEFT JOIN audio_media a ON a.message_id=m.id
+        LEFT JOIN thread_projection_state s ON s.thread_id=m.thread_id
+        LEFT JOIN audio_transcripts t ON t.message_id=m.id AND t.audio_sha256=a.sha256
+          AND t.model=s.desired_model AND t.model_revision=s.desired_revision AND t.locale=s.desired_locale
+        WHERE m.id=?`).get(row.id) as {availability:string|null;status:string|null;model:string|null};
+      return {...row,transcription_status:missing.model ? missing.status ?? missing.availability ?? 'unlinked' : 'paused',
+        index_pending:!!missing.model};
+    }
     const projection = state.get((row as T & { thread_id?: string }).thread_id ??
       row.id.slice(0, row.id.lastIndexOf(':'))) as
-      { desired_generation: number; active_generation: number } | undefined;
+      { desired_generation: number; active_generation: number; pending_audio:number } | undefined;
     return { ...row, transcription_text: t.text, transcription_model: t.model,
-      transcription_status: t.status,
-      index_pending: !t.is_active || !!projection &&
+      transcription_status: t.status, transcription_language:t.locale, transcription_stale:!!t.stale,
+      index_pending:!!t.stale || !t.is_active || !!projection &&
         projection.desired_generation > projection.active_generation };
   });
 }

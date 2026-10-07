@@ -51,11 +51,14 @@ const day = (ts: number) => iso(ts).slice(0, 10);
 const text = (s: string) => ({ content: [{ type: 'text' as const, text: s }] });
 const messageBody = (m: { text: string | null; kind: string;
   transcription_text?: string | null; transcription_model?: string | null;
-  transcription_status?: string | null; index_pending?: boolean }) =>
+  transcription_status?: string | null; transcription_stale?: boolean; index_pending?: boolean }) =>
   (m.text ?? `<${m.kind}>`) + (m.transcription_text
     ? `\n  Áudio transcrito (${m.transcription_model}): ${m.transcription_text}` : '') +
   (m.transcription_status === 'no_speech' ? '\n  [áudio sem fala detectável]' : '') +
-  (m.index_pending ? '\n  [transcrição ainda não publicada no índice]' : '');
+  (m.transcription_stale ? '\n  [transcrição de uma versão anterior do áudio]' : '') +
+  (m.index_pending ? '\n  [atualização de áudio pendente no índice]' : '') +
+  (m.transcription_status && !['done','no_speech'].includes(m.transcription_status)
+    ? `\n  [estado da transcrição: ${m.transcription_status}]` : '');
 
 /**
  * Parse an ISO-ish date, rejecting garbage loudly.
@@ -564,7 +567,7 @@ export function buildServer(deps: ToolDeps): McpServer {
           `  windows:   ${s.windows}\n` +
           `  embedded:  ${s.embedded}/${s.windows} (${pct}%) — ${s.model}\n` +
           `  audio:     ${audio.available}/${audio.referenced} files available; ` +
-            `${audio.done} transcript(s), ${audio.pendingThreads} chat(s) pending projection\n` +
+            `${audio.done} message(s) with transcripts, ${audio.pendingAudio} audio(s) pending; ${audio.pendingThreads} chat(s) pending projection\n` +
           (audio.lastError ? `  audio last error: ${audio.lastError}\n` : '') +
           `  range:     ${iso(s.earliest)} to ${iso(s.latest)}\n` +
           `  last sync: ${s.last_sync_at ? iso(s.last_sync_at) : 'never'}\n\n` +

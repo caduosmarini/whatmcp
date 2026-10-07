@@ -106,16 +106,20 @@ export function listAudioMedia(db: DB): AudioMediaRow[] {
 }
 
 export function mediaStats(db: DB): { referenced: number; available: number; done: number;
-  retryable: number; pendingThreads: number; lastError: string | null } {
+  retryable: number; pendingAudio: number; pendingThreads: number; lastError: string | null } {
   const q = (sql: string) => Number((db.prepare(sql).get() as { n: number }).n);
   return {
     referenced: q('SELECT COUNT(*) n FROM audio_media'),
     available: q("SELECT COUNT(*) n FROM audio_media WHERE availability = 'available'"),
-    done: q("SELECT COUNT(*) n FROM audio_transcripts WHERE status IN ('done','no_speech')"),
+    done: q("SELECT COUNT(DISTINCT message_id) n FROM audio_transcripts WHERE status IN ('done','no_speech')"),
     retryable: q("SELECT COUNT(*) n FROM audio_transcripts WHERE status = 'retryable_error'"),
-    pendingThreads: q('SELECT COUNT(*) n FROM thread_projection_state WHERE desired_generation > active_generation'),
-    lastError: (db.prepare(`SELECT error_code FROM audio_transcripts
-      WHERE error_code IS NOT NULL ORDER BY updated_at DESC LIMIT 1`).get() as
+    pendingAudio: q('SELECT COALESCE(SUM(pending_audio),0) n FROM thread_projection_state'),
+    pendingThreads: q("SELECT COUNT(*) n FROM thread_projection_state WHERE desired_generation > active_generation OR pending_audio > 0"),
+    lastError: (db.prepare(`SELECT t.error_code FROM audio_transcripts t JOIN audio_media a
+        ON a.message_id=t.message_id AND a.sha256=t.audio_sha256
+      JOIN messages m ON m.id=t.message_id JOIN thread_projection_state s ON s.thread_id=m.thread_id
+      WHERE t.error_code IS NOT NULL AND t.model=s.desired_model AND t.locale=s.desired_locale
+        AND t.model_revision=s.desired_revision ORDER BY t.updated_at DESC LIMIT 1`).get() as
       { error_code: string } | undefined)?.error_code ?? null,
   };
 }
