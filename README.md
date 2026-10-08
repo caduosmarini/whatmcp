@@ -212,7 +212,7 @@ npm run tauri --prefix desktop -- build --bundles app,dmg  # macOS
 Use disposable HOME, temporary directories, caches, and `WHATMCP_HOME` for tests
 and native development. Keep real messages and credentials outside the checkout.
 Fixture CI runs on Ubuntu; installer CI produces macOS ARM64 and Windows x64
-artifacts. Read [CI workflows](.github/README.md) and the
+artifacts. Read [CI workflows](.github/CI.md) and the
 [desktop build guide](desktop/README.md#build-and-validation) before native builds
 or enabling the separately signed updater.
 
