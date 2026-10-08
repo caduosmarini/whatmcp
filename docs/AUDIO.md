@@ -3,8 +3,8 @@
 Transcription is disabled by default. `npm run setup` asks whether to enable it,
 lists models available on the current computer, estimates the accessible backfill,
 and asks separately before starting it. Setup saves one default language.
-The three configured model values are
-`apple-speech`, `apple-dictation` (macOS), and `gpt-transcribe` (macOS or Windows).
+The configured model values are `apple-speech`, `apple-dictation` (macOS),
+`faster-whisper` (offline local Python), and `gpt-transcribe` (macOS or Windows).
 Set `transcription_model` to `null` to disable new transcription. The embedding
 model is a separate setting.
 
@@ -41,12 +41,51 @@ The SQLite reference does not guarantee that the audio file is still on disk.
 
 On Windows, the [WAren6 source](WINDOWS.md) collects locally available audio
 and imports verified message references into `WHATMCP_HOME/media/windows`.
+The scheduled hot copy enables media indexing. Voice messages without filenames
+are linked by their message content hash. The fixed acquisition helper also reads
+the live Chromium cache with shared read access, matches encrypted content hashes,
+and verifies the media MAC, plaintext SHA-256 and size before retaining audio.
+Missing recent media can be fetched from HTTPS WhatsApp CDN endpoints; redirects
+and unrelated hosts are rejected. Acquisition keys and signed URLs travel only
+through a private in-memory pipe and are not saved in the resulting case database.
+Automatic acquisition covers up to 200 audio messages from the last seven days.
+For an explicitly requested backfill, `WHATMCP_AUDIO_BACKFILL_AFTER` selects an
+inclusive epoch-second cutoff, with a maximum of 2,000 messages per pass. Each
+acquisition stage has a bounded time budget and prioritizes already cached bytes.
 The importer checks the actual SHA-256 and size, rejects ambiguous filenames or
 paths claimed by different messages, and preserves bytes independently of the
 case directory. It revisits media metadata even for old archived messages below
 the text watermark. Missing or rejected files leave message history intact.
 Override the durable root with `media_roots.windows` if needed. Older WAren6
 schemas without media metadata remain usable for text imports.
+
+## Local Whisper
+
+Use an existing Python environment with `faster-whisper` and an already downloaded
+CTranslate2 Whisper model:
+
+```json
+{
+  "transcription_model": "faster-whisper",
+  "transcription_local_python_path": "C:/path/to/venv/Scripts/python.exe",
+  "transcription_local_model_path": "C:/path/to/cached-whisper-model",
+  "transcription_auto_after_import": true
+}
+```
+
+The local helper disables model downloads and telemetry and never uploads audio.
+It keeps the model loaded for each transcription run. It uses CUDA `int8_float16`
+when available and falls back to CPU `int8` if GPU loading or inference fails.
+Install the pinned dependencies from
+`src/transcription/local-whisper-requirements.txt` before enabling it. Check
+`transcribe-models` to verify the runtime and cached model. An unavailable local
+engine reports a resumable failure; it does not silently switch to the cloud.
+On Windows, optional NVIDIA libraries from
+`src/transcription/local-whisper-cuda-requirements.txt` can be installed into the
+same virtual environment. The helper locates their DLL directories automatically;
+CPU-only installations remain supported.
+Already completed transcripts remain archived without reprocessing. Embedding
+publication uses the separately configured embedding API.
 
 For a compatible `ChatStorage.sqlite` as described in [File import](IMPORT.md),
 if the SQLite file contains `ZMEDIAITEM` paths and matching files have been
@@ -167,7 +206,8 @@ timeouts. Manual `transcribe --limit` remains independent. Reinstall existing
 macOS agents with `npm run wa -- sync-every <hours>` to use this workflow.
 
 Windows scheduled sync uses WAren6 and preserves the
-available audio; choose `gpt-transcribe` explicitly and provide `ffmpeg`/`ffprobe`
+available audio; choose `faster-whisper` for local processing or `gpt-transcribe`
+for OpenAI processing, and provide `ffmpeg`/`ffprobe`
 on the account's PATH (or configure their paths) before processing it. Apple
 models require macOS. One default language remains `pt-BR`.
 

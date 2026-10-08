@@ -1,7 +1,9 @@
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdirSync, readFileSync, renameSync, statSync, existsSync } from 'node:fs';
-import { join, extname, basename } from 'node:path';
+import { mkdirSync, readFileSync, renameSync, statSync, existsSync, readdirSync } from 'node:fs';
+import { join, extname, basename, resolve } from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
+import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { DATA_DIR, type Config, type TranscriptionModel,
   TRANSCRIPTION_MODELS } from '../config.ts';
@@ -9,6 +11,24 @@ import { DATA_DIR, type Config, type TranscriptionModel,
 const exec = promisify(execFile);
 const SWIFT_SOURCE = join(import.meta.dirname, 'AppleTranscribe.swift');
 const APPLE_BINARY = join(DATA_DIR, 'bin', 'apple-transcribe');
+const LOCAL_HELPER = join(import.meta.dirname, 'local-whisper.py');
+
+export function localWhisperPaths(cfg: Pick<Config,'transcriptionLocalPythonPath'|'transcriptionLocalModelPath'> = {}): {python: string; modelPath: string} {
+  const python = cfg.transcriptionLocalPythonPath ?? process.env.WHATMCP_LOCAL_PYTHON_PATH ??
+    join(DATA_DIR,'local-whisper',process.platform === 'win32' ? 'Scripts' : 'bin',
+      process.platform === 'win32' ? 'python.exe' : 'python');
+  if(cfg.transcriptionLocalModelPath)return {python,modelPath:cfg.transcriptionLocalModelPath};
+  if(process.env.WHATMCP_LOCAL_MODEL_PATH)return {python,modelPath:process.env.WHATMCP_LOCAL_MODEL_PATH};
+  for(const repo of ['models--mobiuslabsgmbh--faster-whisper-large-v3-turbo','models--Systran--faster-whisper-small']) {
+    const snapshots=join(homedir(),'.cache','huggingface','hub',repo,'snapshots');
+    if(!existsSync(snapshots))continue;
+    for(const revision of readdirSync(snapshots).sort().reverse()) {
+      const modelPath=join(snapshots,revision);
+      if(existsSync(join(modelPath,'model.bin')) && statSync(join(modelPath,'model.bin')).size>0)return {python,modelPath};
+    }
+  }
+  return {python,modelPath:''};
+}
 
 function appleBinary(): string {
   if (process.platform !== 'darwin') throw new Error('Apple transcription requires macOS');
@@ -31,7 +51,7 @@ export interface ModelAvailability { model: TranscriptionModel; available: boole
 
 /** Asset download is always an explicit setup/CLI action, never a transcription fallback. */
 export async function installAppleModel(model: TranscriptionModel, locale: string): Promise<void> {
-  if (model === 'gpt-transcribe' || process.platform !== 'darwin') {
+  if (!['apple-speech','apple-dictation'].includes(model) || process.platform !== 'darwin') {
     throw new Error('Apple speech assets require macOS and an Apple model');
   }
   await exec(appleBinary(), ['install', model, locale], { timeout: 600_000 });
@@ -41,7 +61,21 @@ export async function availableModels(cfg: Config): Promise<ModelAvailability[]>
   const locale = cfg.transcriptionDefaultLanguage ?? 'pt-BR';
   const out: ModelAvailability[] = [];
   for (const model of TRANSCRIPTION_MODELS) {
-    if (model === 'gpt-transcribe') {
+    if(model === 'faster-whisper') {
+      const paths=localWhisperPaths(cfg);
+      if(!existsSync(paths.python)||!paths.modelPath) {
+        out.push({model,available:false,reason:'local Python environment or cached Whisper model missing'});
+        continue;
+      }
+      try {
+        const {stdout}=await exec(paths.python,[LOCAL_HELPER,'probe','--model-path',paths.modelPath],
+          {timeout:30_000,maxBuffer:1024*1024,windowsHide:true});
+        const result=JSON.parse(stdout) as {available:boolean;reason:string};
+        out.push({model,...result});
+      }catch {
+        out.push({model,available:false,reason:'local faster-whisper runtime or model unavailable'});
+      }
+    } else if (model === 'gpt-transcribe') {
       out.push({ model, available: !!cfg.openaiKey,
         reason: cfg.openaiKey ? 'API key configured; project access checked on use'
           : 'OpenAI API key missing' });
@@ -72,6 +106,129 @@ export class TranscriptionError extends Error {
   }
 }
 
+export interface LocalWhisperSession {
+  device: 'cuda'|'cpu';
+  transcribe(audioPath:string):Promise<string>;
+  close():Promise<void>;
+}
+
+/** One helper owns the loaded model for a sequential local transcription run. */
+export async function createLocalWhisperSession(
+  cfg: Pick<Config,'transcriptionLocalPythonPath'|'transcriptionLocalModelPath'>,
+  locale:string,
+  options: {spawn?:typeof spawn;readyTimeoutMs?:number;requestTimeoutMs?:number;
+    closeTimeoutMs?:number;maxBuffer?:number;terminationTimeoutMs?:number;
+    cleanupTimeoutMs?:number;terminateTree?:(pid:number)=>Promise<void>} = {},
+):Promise<LocalWhisperSession> {
+  const paths=localWhisperPaths(cfg);
+  if(!paths.modelPath)throw new TranscriptionError('local Whisper model missing',false,true);
+  const child=(options.spawn??spawn)(paths.python,[LOCAL_HELPER,'serve','--model-path',paths.modelPath,
+    '--language',locale.split('-')[0]],{stdio:['pipe','pipe','pipe'],windowsHide:true});
+  const decoder=new StringDecoder('utf8');
+  let buffer='',failure:TranscriptionError|undefined,closing=false,closed=false;
+  let pending: {resolve:(result:Record<string,unknown>)=>void;reject:(error:Error)=>void;
+    timer:NodeJS.Timeout}|undefined;
+  let markClosed!:()=>void;
+  const completion=new Promise<void>(r=>{markClosed=r;});
+  const bounded=(operation:Promise<unknown>,timeout:number):Promise<boolean>=>new Promise(resolveWait=>{
+    let done=false;
+    const finish=(completed:boolean)=>{if(done)return;done=true;clearTimeout(timer);resolveWait(completed);};
+    const timer=setTimeout(()=>finish(false),timeout);
+    operation.then(()=>finish(true),()=>finish(true));
+  });
+  let termination:Promise<void>|undefined;
+  const stopChild=():Promise<void>=>termination??=(async()=>{
+    if(process.platform==='win32'&&child.pid&&!closed) {
+      // The venv launcher can have an interpreter child retaining stdio/GPU.
+      // Stop our owned tree before its root disappears, as the sync watchdog does.
+      const stopTree=options.terminateTree??(async(pid:number)=>{
+        await exec('taskkill.exe',['/PID',String(pid),'/T','/F'],
+          {windowsHide:true,timeout:options.terminationTimeoutMs??2000,maxBuffer:1024});
+      });
+      await bounded(Promise.resolve().then(()=>stopTree(child.pid!)),options.terminationTimeoutMs??2000);
+    }
+    if(!closed) {
+      try {child.kill(process.platform==='win32'?'SIGKILL':'SIGTERM');}catch {/* bounded cleanup below */}
+    }
+  })();
+  const fail=(message:string,retryable=false):void=>{
+    failure??=new TranscriptionError(message,retryable,true);
+    if(pending){clearTimeout(pending.timer);pending.reject(failure);pending=undefined;}
+    if(!closed)void stopChild();
+  };
+  const waitForReply=(timeout:number):Promise<Record<string,unknown>>=>new Promise((resolveReply,reject)=>{
+    if(failure){reject(failure);return;}
+    if(closed||closing){reject(new TranscriptionError('local Whisper session closed',true,true));return;}
+    if(pending){reject(new Error('local Whisper session requires sequential requests'));return;}
+    pending={resolve:resolveReply,reject,timer:setTimeout(()=>fail('local Whisper helper timed out',true),timeout)};
+  });
+  child.stdout!.on('data',(chunk:Buffer)=>{
+    buffer+=decoder.write(chunk);
+    if(Buffer.byteLength(buffer,'utf8')>(options.maxBuffer??4*1024*1024)) {
+      fail('local Whisper response exceeded the output limit');return;
+    }
+    let newline:number;
+    while((newline=buffer.indexOf('\n'))>=0) {
+      const line=buffer.slice(0,newline).trim();buffer=buffer.slice(newline+1);
+      if(!line)continue;
+      let result:unknown;
+      try {result=JSON.parse(line);}catch {fail('local Whisper helper returned invalid JSON');return;}
+      if(!result||typeof result!=='object'||Array.isArray(result)||!pending) {
+        fail('local Whisper helper returned an unexpected response');return;
+      }
+      const reply=pending;pending=undefined;clearTimeout(reply.timer);
+      reply.resolve(result as Record<string,unknown>);
+    }
+  });
+  // Drain diagnostics without copying private audio contents or paths into logs.
+  child.stderr!.resume();
+  child.stdin!.on('error',()=>fail('local Whisper input stream failed',true));
+  child.on('error',()=>fail('local Whisper helper could not start',true));
+  child.once('close',()=>{
+    closed=true;
+    if(!closing)fail('local Whisper helper exited before completing the request',true);
+    markClosed();
+  });
+  let closePromise:Promise<void>|undefined;
+  const close=():Promise<void>=>closePromise??=(async()=>{
+    closing=true;
+    if(pending){clearTimeout(pending.timer);pending.reject(new TranscriptionError('local Whisper session closed',true,true));pending=undefined;}
+    if(!closed)child.stdin!.end();
+    if(!await bounded(completion,options.closeTimeoutMs??2000))await stopChild();
+    if(!await bounded(completion,options.cleanupTimeoutMs??1000)) {
+      // Broken executors or inherited pipe handles must not retain the DB lock.
+      // Windows stopChild has already attempted taskkill for the owned tree.
+      if(process.platform!=='win32') {
+        try {child.kill('SIGKILL');}catch {/* detach below */}
+      }
+      child.stdin!.destroy();child.stdout!.destroy();child.stderr!.destroy();child.unref();
+    }
+  })();
+  try {
+    const ready=await waitForReply(options.readyTimeoutMs??90_000);
+    if(ready.available!==true||!['cuda','cpu'].includes(String(ready.device))) {
+      throw new TranscriptionError('local Whisper model could not initialize',false,true);
+    }
+    return {
+      device:ready.device as 'cuda'|'cpu',
+      async transcribe(audioPath:string):Promise<string> {
+        if(pending)throw new Error('local Whisper session requires sequential requests');
+        const response=waitForReply(options.requestTimeoutMs??600_000);
+        if(!failure&&!closed&&!closing)child.stdin!.write(JSON.stringify({audio:resolve(audioPath)})+'\n');
+        const result=await response;
+        if(typeof result.text!=='string') {
+          fail('local Whisper transcription failed; check local runtime and model');
+          throw failure!;
+        }
+        return result.text.trim();
+      },
+      close,
+    };
+  }catch(error) {
+    await close();throw error;
+  }
+}
+
 const AUDIO_TYPES: Record<string,string> = {
   '.wav':'audio/wav','.mp3':'audio/mpeg','.mp4':'audio/mp4','.m4a':'audio/mp4',
   '.mpeg':'audio/mpeg','.mpga':'audio/mpeg','.webm':'audio/webm','.ogg':'audio/ogg','.flac':'audio/flac',
@@ -86,10 +243,32 @@ export interface TranscriptionTransport {
   sleep?: (ms:number)=>Promise<void>;
   random?: ()=>number;
   prompt?: string;
+  localPythonPath?: string;
+  localModelPath?: string;
+  /** Offline provider adapter for command construction and failure tests. */
+  localExec?: (command:string,args:string[])=>Promise<{stdout:string}>;
 }
 
 export async function transcribeSegment(model: TranscriptionModel, locale: string,
   audioPath: string, apiKey: string | null, transport: TranscriptionTransport = {}): Promise<string> {
+  if(model === 'faster-whisper') {
+    const paths=localWhisperPaths({transcriptionLocalPythonPath:transport.localPythonPath,
+      transcriptionLocalModelPath:transport.localModelPath});
+    if(!paths.modelPath)throw new TranscriptionError('local Whisper model missing',false,true);
+    try {
+      const args=[LOCAL_HELPER,'transcribe','--model-path',paths.modelPath,
+        '--language',locale.split('-')[0],'--audio',audioPath];
+      const {stdout}=await (transport.localExec ?? ((command,args)=>exec(command,args,
+        {timeout:600_000,maxBuffer:4*1024*1024,windowsHide:true})))(paths.python,args);
+      const result=JSON.parse(stdout) as {text?:string};
+      if(typeof result.text!=='string')throw new Error('local transcription returned no text');
+      return result.text.trim();
+    }catch(e) {
+      const error=e as NodeJS.ErrnoException & {killed?:boolean};
+      throw new TranscriptionError(error.killed ? 'local Whisper transcription timed out'
+        : 'local Whisper transcription failed; check local runtime and model',!!error.killed,!error.killed);
+    }
+  }
   if (model !== 'gpt-transcribe') {
     try {
       const { stdout } = await exec(appleBinary(), ['transcribe', model, locale, audioPath],

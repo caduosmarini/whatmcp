@@ -1,0 +1,3 @@
+# Optional Windows GPU libraries, installed into the same local Whisper venv.
+nvidia-cublas-cu12==12.9.2.10
+nvidia-cudnn-cu12==9.27.0.42

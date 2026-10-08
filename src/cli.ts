@@ -690,7 +690,7 @@ switch (cmd) {
   index [--full]            index; configured automatic audio also embeds
   embed [--limit=N]         embed only
   media import --root=DIR    link audio from a prepared source or manifest
-  transcribe-models          check the three transcription models
+  transcribe-models          check available local and OpenAI transcription models
   transcribe [--limit=N]     resume pending audio transcription (default 100)
     --retry-errors          retry permanent errors after fixing their cause
     --reprocess             queue historical audio for the current model/language
