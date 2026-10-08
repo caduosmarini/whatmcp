@@ -88,7 +88,56 @@ In the desktop app, **Buscar** searches the archive, **Conversas** opens threads
 **Atividade** manages jobs and backlogs, and **Ajustes** edits settings or reopens
 the guided setup.
 
-With a configured …555 tokens truncated…mistaken for
+With a configured CLI archive, search for a phrase or list conversations:
+
+```sh
+npm run wa -- search "invoice" --mode=bm25
+npm run wa -- search "payment arrangements" --chat="Project" --mode=hybrid
+npm run wa -- chats
+npm run wa -- conversation "thread-id-from-chats"
+```
+
+Keyword search needs no API key. Hybrid and vector search require embeddings and
+a configured OpenAI key. CLI commands default to `~/.whatmcp`; set `WHATMCP_HOME`
+to the selected desktop profile when using the same archive.
+
+For an MCP client, launch the stdio server with `npm run serve` or configure the
+Node entry point in the client. Start with `search_messages`, then use
+`get_conversation` to read a hit in context. `list_messages_since` provides a
+chronological, paginated feed without relevance ranking or embeddings.
+See [CLI and MCP usage](docs/USAGE.md) for setup, client configuration, all nine
+tools, recurring reviews, scheduling, and backups.
+
+## How it works
+
+WhatMCP reads a supported source into its own SQLite archive. Consecutive messages
+in each chat become conversation windows, preserving the context that a short
+message such as “yes” lacks on its own. Text search uses SQLite FTS5; optional
+embeddings add semantic search, with the rankings combined for hybrid results.
+
+```mermaid
+flowchart LR
+  S[Supported WhatsApp source] --> I[Import / sync]
+  I --> A[Local SQLite archive]
+  A --> W[Conversation windows]
+  W --> F[FTS5 text index]
+  W -. Optional: sends text .-> E[OpenAI embeddings]
+  E --> V[Stored vectors]
+  F --> R[Search + conversation context]
+  V --> R
+  A --> R
+  R --> D[Desktop app]
+  R --> C[CLI / MCP clients]
+```
+
+The desktop shell is **React + Tauri 2**, backed by bundled **Node 22 and SQLite**.
+Its production backend uses private stdin/stdout through allowlisted Rust commands;
+opening the app starts no HTTP or MCP listener. CLI MCP transports are separate:
+stdio by default, or opt-in Streamable HTTP with authentication.
+
+Imports upsert stable message IDs rather than replacing the archive. Changed
+conversation windows get new content hashes; embedding work resumes from what is
+missing. Search exposes strong/weak match labels so similarity is not mistaken for
 evidence. See [architecture and data guarantees](docs/ARCHITECTURE.md) for the
 retrieval, persistence, and security decisions.
 
