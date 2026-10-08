@@ -117,7 +117,8 @@ export async function createLocalWhisperSession(
   cfg: Pick<Config,'transcriptionLocalPythonPath'|'transcriptionLocalModelPath'>,
   locale:string,
   options: {spawn?:typeof spawn;readyTimeoutMs?:number;requestTimeoutMs?:number;
-    closeTimeoutMs?:number;maxBuffer?:number} = {},
+    closeTimeoutMs?:number;maxBuffer?:number;terminationTimeoutMs?:number;
+    cleanupTimeoutMs?:number;terminateTree?:(pid:number)=>Promise<void>} = {},
 ):Promise<LocalWhisperSession> {
   const paths=localWhisperPaths(cfg);
   if(!paths.modelPath)throw new TranscriptionError('local Whisper model missing',false,true);
@@ -129,10 +130,31 @@ export async function createLocalWhisperSession(
     timer:NodeJS.Timeout}|undefined;
   let markClosed!:()=>void;
   const completion=new Promise<void>(r=>{markClosed=r;});
+  const bounded=(operation:Promise<unknown>,timeout:number):Promise<boolean>=>new Promise(resolveWait=>{
+    let done=false;
+    const finish=(completed:boolean)=>{if(done)return;done=true;clearTimeout(timer);resolveWait(completed);};
+    const timer=setTimeout(()=>finish(false),timeout);
+    operation.then(()=>finish(true),()=>finish(true));
+  });
+  let termination:Promise<void>|undefined;
+  const stopChild=():Promise<void>=>termination??=(async()=>{
+    if(process.platform==='win32'&&child.pid&&!closed) {
+      // The venv launcher can have an interpreter child retaining stdio/GPU.
+      // Stop our owned tree before its root disappears, as the sync watchdog does.
+      const stopTree=options.terminateTree??(async(pid:number)=>{
+        await exec('taskkill.exe',['/PID',String(pid),'/T','/F'],
+          {windowsHide:true,timeout:options.terminationTimeoutMs??2000,maxBuffer:1024});
+      });
+      await bounded(Promise.resolve().then(()=>stopTree(child.pid!)),options.terminationTimeoutMs??2000);
+    }
+    if(!closed) {
+      try {child.kill(process.platform==='win32'?'SIGKILL':'SIGTERM');}catch {/* bounded cleanup below */}
+    }
+  })();
   const fail=(message:string,retryable=false):void=>{
     failure??=new TranscriptionError(message,retryable,true);
     if(pending){clearTimeout(pending.timer);pending.reject(failure);pending=undefined;}
-    if(!closed)child.kill();
+    if(!closed)void stopChild();
   };
   const waitForReply=(timeout:number):Promise<Record<string,unknown>>=>new Promise((resolveReply,reject)=>{
     if(failure){reject(failure);return;}
@@ -172,9 +194,15 @@ export async function createLocalWhisperSession(
     closing=true;
     if(pending){clearTimeout(pending.timer);pending.reject(new TranscriptionError('local Whisper session closed',true,true));pending=undefined;}
     if(!closed)child.stdin!.end();
-    const timer=setTimeout(()=>{if(!closed)child.kill();},options.closeTimeoutMs??2000);
-    const force=setTimeout(()=>{if(!closed)child.kill('SIGKILL');},(options.closeTimeoutMs??2000)+1000);
-    try {await completion;}finally {clearTimeout(timer);clearTimeout(force);}
+    if(!await bounded(completion,options.closeTimeoutMs??2000))await stopChild();
+    if(!await bounded(completion,options.cleanupTimeoutMs??1000)) {
+      // Broken executors or inherited pipe handles must not retain the DB lock.
+      // Windows stopChild has already attempted taskkill for the owned tree.
+      if(process.platform!=='win32') {
+        try {child.kill('SIGKILL');}catch {/* detach below */}
+      }
+      child.stdin!.destroy();child.stdout!.destroy();child.stderr!.destroy();child.unref();
+    }
   })();
   try {
     const ready=await waitForReply(options.readyTimeoutMs??90_000);
