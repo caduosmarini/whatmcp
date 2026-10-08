@@ -48,13 +48,17 @@ imports its validated `unified_whatsapp.db`. No WAren6 code is bundled here.
 
 `npm run sync` uses `scripts/sync-hotcopy-windows.ps1` to copy LocalState,
 WebView2 IndexedDB and Local Storage while WhatsApp remains open. It then runs
-WAren6 offline against that copy with `-f -n -NoArchive -PreservedCopy`, validates
+WAren6 offline against that copy with `-f -n -m -NoArchive -PreservedCopy`, validates
 the new case and imports its `unified_whatsapp.db`. Manual sync also embeds new
 windows. There is no close/reopen step or confirmation dialog.
 
 Use the WAren6 fork's preserved-copy implementation, starting at commit
 `e53aa64`. Use `3fd7f19` or newer for the quoted-reply index that avoids
-repeated full-chat scans during unification. It refuses an incomplete preserved source instead of falling back to
+repeated full-chat scans during unification. The audio acquisition described here
+also requires the hash-based media linking and in-memory acquisition callback
+from `865b9e8` on the fork's `windows-audio-media-linking` branch, or a later
+revision containing those changes. Until merged, check out that branch explicitly.
+It refuses an incomplete preserved source instead of falling back to
 live acquisition. Upstream WAren6 remains available at
 https://github.com/MayukXT/WAren6. WhatMCP invokes this GPL-3.0 dependency as a
 separate process; its implementation is not bundled in this MIT repository.
@@ -161,3 +165,11 @@ is separate and opt-in. These checks do not exercise a live encrypted WhatsApp
 package, a real WAren6 acquisition, Windows account credentials, or a paid audio
 API request. Validate one real collection under the intended Windows service or
 interactive account before relying on that environment.
+
+Run the cache and local Whisper protocol tests separately; they use synthetic
+data and do not require the Whisper model or upload audio:
+
+```powershell
+python test/windows-cache-audio.test.py
+python test/local-whisper.test.py
+```

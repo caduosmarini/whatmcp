@@ -19,6 +19,7 @@ npm install
 | Source | Setup |
 |---|---|
 | WhatsApp Desktop on macOS | Sign in to WhatsApp Desktop, then run `npm run setup`. |
+| WhatsApp Desktop on Windows | Configure the separate [WAren6 source](docs/WINDOWS.md) and choose a local or OpenAI transcription model. |
 | A compatible `ChatStorage.sqlite` file on Windows or macOS | Use the [file import commands](docs/IMPORT.md). |
 | An existing WhatMCP archive | Set `WHATMCP_STORE` to the archive path. See [archive configuration](docs/IMPORT.md#use-an-existing-archive). |
 
@@ -26,12 +27,13 @@ To recover older messages from an iPhone backup, follow
 [Import iPhone history](docs/IPHONE.md), then use the prepared file as the source.
 
 Indexing, embedding, search, and the MCP servers use Node.js and SQLite. The
-source reader expects the WhatsApp Core Data schema. A file import does not
+macOS/file source reader expects the WhatsApp Core Data schema; the Windows
+adapter imports WAren6's validated unified database. A file import does not
 require WhatsApp to be installed on the computer that runs WhatMCP.
 
-The guided setup also accepts a compatible SQLite file on Windows. Scheduled sync
-and deployment scripts target macOS. There is no source adapter for the Windows
-WhatsApp app; Windows imports need an explicit source path.
+The guided setup accepts a compatible SQLite file on Windows, or the separate
+WAren6 adapter for the native Windows app. Windows hot-copy scheduling keeps
+WhatsApp open; see [Windows integration](docs/WINDOWS.md).
 
 For macOS Desktop setup, `npm run setup` checks permissions, prompts for an API
 key, and builds the archive. It shows the estimated embedding cost before asking
