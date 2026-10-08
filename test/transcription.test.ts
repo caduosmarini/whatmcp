@@ -63,6 +63,44 @@ function mockOptions(transcribe: (n: number) => string | Promise<string>) {
   };
 }
 
+test('local worker reuses one persistent session across segments and closes it',async()=>{
+  const f=fixture();let launches=0,requests=0,closes=0;
+  try {
+    const options=mockOptions(()=> 'unused');
+    const {transcribe,...conversion}=options;
+    const result=await runTranscription({...f.cfg,transcriptionModel:'faster-whisper'},{...conversion,
+      localSessionFactory:async()=>{
+        launches++;return {device:'cuda',transcribe:async()=>`local segment ${++requests}`,
+          close:async()=>{closes++;}};
+      },
+    });
+    assert.equal(result.processed,1);assert.equal(result.failed,0);
+    assert.equal(launches,1);assert.equal(requests,2);assert.equal(closes,1);
+    const db=openStore(f.store);
+    assert.equal((db.prepare("SELECT text FROM audio_transcripts WHERE status='done'").get() as any).text,
+      'local segment 1 local segment 2');db.close();
+  }finally {rmSync(f.dir,{recursive:true,force:true});}
+});
+
+test('local worker closes a failed session and preserves completed segments',async()=>{
+  const f=fixture();let requests=0,closes=0;
+  try {
+    const options=mockOptions(()=> 'unused');const {transcribe,...conversion}=options;
+    const {TranscriptionError}=await import('../src/transcription/models.ts');
+    const result=await runTranscription({...f.cfg,transcriptionModel:'faster-whisper'},{...conversion,
+      localSessionFactory:async()=>({device:'cpu',transcribe:async()=>{
+        if(requests++===0)return 'saved local words';
+        throw new TranscriptionError('local inference failed',true,true);
+      },close:async()=>{closes++;}}),
+    });
+    assert.equal(result.failed,1);assert.equal(closes,1);
+    const db=openStore(f.store);
+    assert.equal((db.prepare('SELECT COUNT(*) n FROM transcript_segments').get() as any).n,1);
+    assert.equal((db.prepare('SELECT status FROM audio_transcripts').get() as any).status,'retryable_error');
+    db.close();
+  }finally {rmSync(f.dir,{recursive:true,force:true});}
+});
+
 test('audio enters its chronological position; re-running keeps the same windows', async () => {
   const f = fixture();
   try {

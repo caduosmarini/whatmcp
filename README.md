@@ -47,7 +47,9 @@ The archive, vectors, index, and search stay on this computer. **Conversation
 text is sent to OpenAI for embeddings** when embedding is enabled, as is each
 semantic search query. Audio transcription is off by default. Choosing
 `gpt-transcribe` explicitly sends accessible audio files to OpenAI; the two
-Apple models run locally on a supported Mac. Transcript text included in a
+Apple models run locally on a supported Mac. `faster-whisper` runs locally with
+an installed Python environment and cached Whisper model, including on Windows.
+Transcript text included in a
 conversation window is also sent when that window is embedded.
 
 ```

@@ -80,15 +80,26 @@ cannot remove linked voice messages.
 compatible ChatStorage import. `doctor` validates the selected source. Native
 acquisition preserves known audio formats from transfer folders, in addition to
 the WebView database evidence. Images and documents are not imported into the
-media/transcription archive. Only audio actually present locally and attributed
-unambiguously can be transcribed; extraction does not retrieve missing audio
-from WhatsApp servers.
+media/transcription archive. The media index links voice messages without filenames
+by their SHA-256. The acquisition helper recovers exact matching ciphertext from
+the Windows HTTP cache and can fetch missing audio from verified WhatsApp HTTPS
+endpoints. It authenticates and checks the plaintext hash and size before import;
+unavailable or mismatched audio leaves the original message intact. Private media
+keys remain in memory and are passed only to the fixed local helper.
 
 The audio importer verifies bytes against the case hash and size, preserves
 stable message IDs, and discovers late media even below the message watermark.
 It retains existing transcripts and searchable text while replacement audio is
-pending. See [Audio transcription](AUDIO.md) for opt-in `gpt-transcribe`, one
+pending. See [Audio transcription](AUDIO.md) for local `faster-whisper` or opt-in `gpt-transcribe`, one
 default language (`pt-BR`), decoder paths, costs and manual processing.
+
+For local transcription, install the pinned dependencies from
+`src/transcription/local-whisper-requirements.txt` in a Python environment and
+set `transcription_local_python_path` and `transcription_local_model_path` to
+existing paths. `npm run wa -- transcribe-models` checks the runtime and cached
+model without downloading model files. The account running the scheduled task
+or service needs read and execute access to Python and read access to every
+model file, including the targets of any cache symlinks.
 
 ## Scheduled collection
 
