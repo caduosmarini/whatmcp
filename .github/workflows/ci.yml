@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 15
     env:
       # Tests use fixtures; never connect an installed WhatsApp or production archive.
-      WHATMCP_HOME: ${{ runner.temp }}/whatmcp-ci
+      WHATMCP_HOME: ${{ github.workspace }}/.ci-sandbox/data
       OPENAI_API_KEY: ''
     steps:
       - uses: actions/checkout@v7

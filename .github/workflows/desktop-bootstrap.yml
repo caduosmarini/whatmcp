@@ -27,7 +27,7 @@ jobs:
             target: windows-x64
             arch: x64
     env:
-      WHATMCP_HOME: ${{ runner.temp }}/whatmcp-desktop-bootstrap
+      WHATMCP_HOME: ${{ github.workspace }}/.ci-sandbox/data
       OPENAI_API_KEY: ''
       BOOTSTRAP_TARGET: ${{ matrix.target }}
       BOOTSTRAP_ARCH: ${{ matrix.arch }}
