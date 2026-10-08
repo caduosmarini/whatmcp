@@ -4,7 +4,7 @@ import {mkdtempSync,rmSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {openStore} from '../src/db/index.ts';
-import {getStore,invalidate} from '../src/store.ts';
+import {getStore,invalidate,closeStores} from '../src/store.ts';
 import {windowHash} from '../src/index/chunker.ts';
 
 test('transcription progress reuses vectors, publication and embeddings invalidate them',()=>{
@@ -25,5 +25,5 @@ test('transcription progress reuses vectors, publication and embeddings invalida
     const publication=getStore(path,'test');assert.notEqual(publication.vectors,first.vectors);
     db.exec('UPDATE window_vectors SET created_at=1');
     assert.notEqual(getStore(path,'test').vectors,publication.vectors);db.close();
-  }finally{invalidate();rmSync(dir,{recursive:true,force:true});}
+  }finally{closeStores();rmSync(dir,{recursive:true,force:true});}
 });

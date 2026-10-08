@@ -1,3 +1,4 @@
+import { closeStores } from '../src/store.ts';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
@@ -120,7 +121,7 @@ test('audio enters its chronological position; re-running keeps the same windows
     const check = openStore(f.store);
     assert.deepEqual(check.prepare('SELECT id, text, content_hash FROM windows').all(), first);
     check.close();
-  } finally { rmSync(f.dir, { recursive: true, force: true }); }
+  } finally { closeStores();rmSync(f.dir, { recursive: true, force: true }); }
 });
 
 test('saved segments survive failure and resume without retranscribing', async () => {
@@ -144,7 +145,7 @@ test('saved segments survive failure and resume without retranscribing', async (
     assert.equal((check.prepare('SELECT text FROM audio_transcripts WHERE status = ?').get('done') as any).text,
       'first segment second segment');
     check.close();
-  } finally { rmSync(f.dir, { recursive: true, force: true }); }
+  } finally { closeStores();rmSync(f.dir, { recursive: true, force: true }); }
 });
 
 test('model switch retains old active windows until the new result is complete', async () => {
@@ -167,7 +168,7 @@ test('model switch retains old active windows until the new result is complete',
     assert.equal((final.prepare('SELECT model FROM active_transcripts').get() as any).model,
       'apple-dictation');
     final.close();
-  } finally { rmSync(f.dir, { recursive: true, force: true }); }
+  } finally { closeStores();rmSync(f.dir, { recursive: true, force: true }); }
 });
 
 test('vector-pending state clears only after the published window hashes have vectors', async () => {
@@ -190,7 +191,7 @@ test('vector-pending state clears only after the published window hashes have ve
     assert.equal((check.prepare('SELECT status FROM thread_projection_state').get() as any).status,
       'current');
     check.close();
-  } finally { rmSync(f.dir, { recursive: true, force: true }); }
+  } finally { closeStores();rmSync(f.dir, { recursive: true, force: true }); }
 });
 
 test('permanent model errors require an explicit retry after correction', async () => {
@@ -212,7 +213,7 @@ test('permanent model errors require an explicit retry after correction', async 
       ...mockOptions(() => 'works after correction'), retryErrors: true,
     });
     assert.equal(retried.processed, 1);
-  } finally { rmSync(f.dir, { recursive: true, force: true }); }
+  } finally { closeStores();rmSync(f.dir, { recursive: true, force: true }); }
 });
 
 test('explicit Windows-style manifest links only known messages and paths stay within root', () => {
@@ -233,7 +234,7 @@ test('explicit Windows-style manifest links only known messages and paths stay w
     writeFileSync(outside, 'bytes');
     symlinkSync(outside, join(f.mediaRoot, 'link.ogg'));
     assert.throws(() => resolveMediaPath(f.mediaRoot, 'link.ogg'));
-  } finally { rmSync(f.dir, { recursive: true, force: true }); }
+  } finally { closeStores();rmSync(f.dir, { recursive: true, force: true }); }
 });
 
 test('one default language supports canonical tags and the legacy setting', () => {
@@ -254,7 +255,7 @@ test('returning to a cached language republishes its transcript', async () => {
     const db = openStore(f.store);
     assert.equal((db.prepare('SELECT locale FROM active_transcripts').get() as any).locale, 'pt-BR');
     db.close();
-  } finally { rmSync(f.dir, {recursive:true,force:true}); }
+  } finally { closeStores();rmSync(f.dir, {recursive:true,force:true}); }
 });
 
 test('incremental media scan discovers paths added or changed below the watermark', () => {
@@ -272,7 +273,7 @@ test('incremental media scan discovers paths added or changed below the watermar
     assert.equal(scanSourceMedia(db, f.source, 'import', 3), 1);
     assert.equal((db.prepare('SELECT relative_path FROM audio_media').get() as any).relative_path, 'new.ogg');
     source.close(); db.close();
-  } finally { rmSync(f.dir,{recursive:true,force:true}); }
+  } finally { closeStores();rmSync(f.dir,{recursive:true,force:true}); }
 });
 
 function addAudio(f: ReturnType<typeof fixture>, id: string, bytes = 'different bytes') {
@@ -300,7 +301,7 @@ test('one failed audio does not block usable transcripts from the same conversat
     assert.equal((db.prepare('SELECT pending_audio FROM thread_projection_state').get() as any).pending_audio,1);
     assert.equal((db.prepare('SELECT status FROM thread_projection_state').get() as any).status,'partial');
     db.close();
-  } finally {rmSync(f.dir,{recursive:true,force:true});}
+  } finally {closeStores();rmSync(f.dir,{recursive:true,force:true});}
 });
 
 test('disabling processing and projecting keeps archived transcripts searchable', async () => {
@@ -315,7 +316,7 @@ test('disabling processing and projecting keeps archived transcripts searchable'
     assert.deepEqual(db.prepare('SELECT text,content_hash FROM windows').all(),before);
     assert.equal((db.prepare('SELECT COUNT(*) n FROM active_transcripts').get() as any).n,1);
     db.close();
-  } finally {rmSync(f.dir,{recursive:true,force:true});}
+  } finally {closeStores();rmSync(f.dir,{recursive:true,force:true});}
 });
 
 test('unchanged files skip hashing and forwarded audio shares the content cache', async () => {
@@ -332,7 +333,7 @@ test('unchanged files skip hashing and forwarded audio shares the content cache'
     assert.equal(hashes,2);assert.equal(calls,1);
     await runTranscription(f.cfg,{...options,verifyFiles:true});
     assert.equal(hashes,4);assert.equal(calls,1);
-  } finally {rmSync(f.dir,{recursive:true,force:true});}
+  } finally {closeStores();rmSync(f.dir,{recursive:true,force:true});}
 });
 
 test('changing defaults preserves old work until historical reprocessing is requested', async () => {
@@ -346,7 +347,7 @@ test('changing defaults preserves old work until historical reprocessing is requ
     assert.equal((db.prepare('SELECT model FROM active_transcripts').get() as any).model,'apple-speech');db.close();
     const changed=await runTranscription(cfg,{...mockOptions(()=> 'new engine'),reprocess:true});
     assert.equal(changed.processed,1);
-  } finally {rmSync(f.dir,{recursive:true,force:true});}
+  } finally {closeStores();rmSync(f.dir,{recursive:true,force:true});}
 });
 
 test('publication occurs during a long batch and new file bytes are retranscribed', async () => {
@@ -362,7 +363,7 @@ test('publication occurs during a long batch and new file bytes are retranscribe
     writeFileSync(join(f.mediaRoot,'voice.ogg'),'new content of different size');
     const result=await runTranscription(f.cfg,{duration:async()=>1,convert:mockOptions(()=> '').convert,transcribe:async()=> 'changed content'});
     assert.equal(result.processed,1);
-  } finally {rmSync(f.dir,{recursive:true,force:true});}
+  } finally {closeStores();rmSync(f.dir,{recursive:true,force:true});}
 });
 
 test('segment planning uses silence near boundaries without gaps or overlaps',()=>{
@@ -379,7 +380,7 @@ test('GPT sends a supported short source directly and stores a reproducible segm
     const t=db.prepare('SELECT segment_plan,model_revision FROM audio_transcripts').get() as any;
     assert.equal(t.model_revision,TRANSCRIPTION_REVISION);
     assert.deepEqual(JSON.parse(t.segment_plan),[{start:0,end:20}]);db.close();
-  }finally{rmSync(f.dir,{recursive:true,force:true});}
+  }finally{closeStores();rmSync(f.dir,{recursive:true,force:true});}
 });
 
 test('cloud concurrency is bounded, deduplicates forwards and respects the batch limit',async()=>{
@@ -393,7 +394,7 @@ test('cloud concurrency is bounded, deduplicates forwards and respects the batch
     assert.equal(first.processed,1);assert.equal(calls,1);
     const next=await runTranscription(cfg,adapter);
     assert.equal(next.processed,3);assert.equal(next.reused,1);assert.equal(calls,3);assert.equal(max,2);
-  }finally{rmSync(f.dir,{recursive:true,force:true});}
+  }finally{closeStores();rmSync(f.dir,{recursive:true,force:true});}
 });
 
 test('identical words from a different engine retain their embedding hash and expose provenance',async()=>{
@@ -405,7 +406,7 @@ test('identical words from a different engine retain their embedding hash and ex
     const msgs=getConversation({storePath:f.store,embedCfg:{model:f.cfg.openaiModel,dimensions:1536,apiKey:'unused'}},{thread_id:'123@s.whatsapp.net'});
     const voice=msgs.find(m=>m.kind==='audio')!;
     assert.equal(voice.transcription_model,'apple-dictation');assert.equal(voice.transcription_language,'pt-BR');
-  }finally{rmSync(f.dir,{recursive:true,force:true});}
+  }finally{closeStores();rmSync(f.dir,{recursive:true,force:true});}
 });
 test('failed audio state and valid transcript are visible through conversation reads and FTS',async()=>{
   const f=fixture();try{
@@ -416,7 +417,7 @@ test('failed audio state and valid transcript are visible through conversation r
     const msgs=getConversation(ctx,{thread_id:'123@s.whatsapp.net'});
     assert.equal(msgs.find(m=>m.id.endsWith(':broken'))?.transcription_status,'retryable_error');
     assert.equal((await searchHybrid(ctx,{query:'reunião',mode:'bm25'})).hits.length,1);
-  }finally{rmSync(f.dir,{recursive:true,force:true});}
+  }finally{closeStores();rmSync(f.dir,{recursive:true,force:true});}
 });
 
 test('partial vector coverage is reported when only some published windows have embeddings',async()=>{
@@ -432,7 +433,7 @@ test('partial vector coverage is reported when only some published windows have 
     globalThis.fetch=async()=>new Response(JSON.stringify({data:[{index:0,embedding:Array.from(vector)}],usage:{total_tokens:1}}));
     const result=await searchHybrid({storePath:f.store,embedCfg:{model:f.cfg.openaiModel,dimensions:1536,apiKey:'test'}},{query:'reunião'});
     assert.match(result.degraded!,/coverage is incomplete/);assert.ok(result.hits.length);
-  }finally{globalThis.fetch=original;rmSync(f.dir,{recursive:true,force:true});}
+  }finally{globalThis.fetch=original;closeStores();rmSync(f.dir,{recursive:true,force:true});}
 });
 
 test('completed audio has zero pending inference cost in setup inventory',async()=>{
@@ -443,7 +444,7 @@ test('completed audio has zero pending inference cost in setup inventory',async(
     addAudio(f,'forwarded','fake audio bytes');
     const cache=await inventoryAudio(f.cfg);
     assert.equal(cache.pending,1);assert.equal(cache.reused,1);assert.equal(cache.estimatedSeconds,0);
-  }finally{rmSync(f.dir,{recursive:true,force:true});}
+  }finally{closeStores();rmSync(f.dir,{recursive:true,force:true});}
 });
 
 test('a cooldown survives restart and prevents immediate provider retries',async()=>{
@@ -454,7 +455,7 @@ test('a cooldown survives restart and prevents immediate provider retries',async
       calls++;throw new TranscriptionError('rate limit',true,true,120);}};
     assert.equal((await runTranscription(f.cfg,options)).failed,1);
     assert.equal((await runTranscription(f.cfg,options)).failed,0);assert.equal(calls,1);
-  }finally{rmSync(f.dir,{recursive:true,force:true});}
+  }finally{closeStores();rmSync(f.dir,{recursive:true,force:true});}
 });
 test('interrupted reprocessing remains queued after restart without the flag',async()=>{
   const f=fixture();try{
@@ -467,7 +468,7 @@ test('interrupted reprocessing remains queued after restart without the flag',as
     assert.equal(second.processed,1);
     const db=openStore(f.store);
     assert.equal((db.prepare("SELECT COUNT(*) n FROM active_transcripts WHERE model='apple-dictation'").get() as any).n,2);db.close();
-  }finally{rmSync(f.dir,{recursive:true,force:true});}
+  }finally{closeStores();rmSync(f.dir,{recursive:true,force:true});}
 });
 test('a new text sync keeps published transcripts while audio replacement is pending',async()=>{
   const f=fixture();try{
@@ -478,7 +479,7 @@ test('a new text sync keeps published transcripts while audio replacement is pen
     runIndex(f.store,{chatstorage:'',snapshotPath:f.source,mediaSourceId:'import'});
     const db=openStore(f.store);const text=(db.prepare('SELECT text FROM windows').get() as any).text;
     assert.match(text,/preserved words/);assert.match(text,/texto novo/);db.close();
-  }finally{rmSync(f.dir,{recursive:true,force:true});}
+  }finally{closeStores();rmSync(f.dir,{recursive:true,force:true});}
 });
 
 
@@ -510,5 +511,5 @@ test('an empty replacement cannot remove usable words for identical audio bytes'
     assert.equal((db.prepare('SELECT model FROM active_transcripts').get() as any).model,'apple-speech');
     assert.equal((db.prepare("SELECT status FROM audio_transcripts WHERE model='apple-dictation'").get() as any).status,'no_speech');
     db.close();
-  } finally {rmSync(f.dir,{recursive:true,force:true});}
+  } finally {closeStores();rmSync(f.dir,{recursive:true,force:true});}
 });

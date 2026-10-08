@@ -243,6 +243,8 @@ export interface TranscriptionRun {
 }
 
 export async function runTranscription(cfg: Config, options: {
+  /** Desktop single-recording action; no other recordings are processed. */
+  messageId?: string;
   limit?: number;
   retryErrors?: boolean;
   /** Request the configured engine/language for historical audio too. */
@@ -278,12 +280,13 @@ export async function runTranscription(cfg: Config, options: {
     reconcileProjectionModel(db, model, locale);
     if (options.retryErrors) db.prepare(`UPDATE audio_transcripts
       SET status = 'retryable_error', attempts = 0, error_code = NULL, lease_until = NULL, next_retry_at = NULL
-      WHERE model = ? AND locale = ? AND status = 'permanent_error'`)
-      .run(model, locale);
+      WHERE model = ? AND locale = ? AND status = 'permanent_error'
+      AND (? IS NULL OR message_id = ?)`)
+      .run(model, locale, options.messageId ?? null, options.messageId ?? null);
     await refreshAudioMedia(db,cfg,options);
     // Exclusive worker lock proves no other live worker owns these leases.
     db.prepare("UPDATE audio_transcripts SET lease_until=0 WHERE status='processing'") .run();
-    const rows = listAudioMedia(db);
+    const rows = listAudioMedia(db).filter(row => !options.messageId || row.message_id === options.messageId);
     if (options.reprocess) {
       const enqueue = db.prepare(`INSERT OR IGNORE INTO audio_transcripts
         (message_id,audio_sha256,model,model_revision,locale,status,updated_at)

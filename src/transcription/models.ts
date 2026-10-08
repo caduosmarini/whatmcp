@@ -32,6 +32,9 @@ export function localWhisperPaths(cfg: Pick<Config,'transcriptionLocalPythonPath
 
 function appleBinary(): string {
   if (process.platform !== 'darwin') throw new Error('Apple transcription requires macOS');
+  // Desktop builds ship this helper; end users do not need Xcode or swiftc.
+  const bundled = process.env.WHATMCP_APPLE_BINARY;
+  if (bundled && existsSync(bundled)) return bundled;
   if (existsSync(APPLE_BINARY) && statSync(APPLE_BINARY).mtimeMs >= statSync(SWIFT_SOURCE).mtimeMs) {
     return APPLE_BINARY;
   }

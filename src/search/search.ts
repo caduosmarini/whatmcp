@@ -21,6 +21,8 @@ export interface SearchParams {
   query: string;
   thread?: string; // substring match on chat title
   sender?: string; // substring match on speaker names
+  threadId?: string; // exact archive identity, used by desktop selections
+  senderId?: string;
   after?: number;  // unix seconds
   before?: number;
   limit?: number;
@@ -189,6 +191,14 @@ const MIN_BM25_COVERAGE = 0.5;
 function filterClauses(p: SearchParams): { sql: string[]; args: any[] } {
   const sql: string[] = [];
   const args: any[] = [];
+  if (p.threadId) {
+    sql.push('w.thread_id = ?');
+    args.push(p.threadId);
+  }
+  if (p.senderId) {
+    sql.push('EXISTS (SELECT 1 FROM messages sm WHERE sm.thread_id=w.thread_id AND sm.ts BETWEEN w.start_ts AND w.end_ts AND sm.sender_id=?)');
+    args.push(p.senderId);
+  }
   if (p.thread) {
     sql.push('t.title LIKE ?');
     args.push(`%${p.thread}%`);
@@ -280,7 +290,8 @@ export interface SearchOutcome {
   strongCount: number;
 }
 
-export async function searchHybrid(ctx: SearchContext, p: HybridParams): Promise<SearchOutcome> {
+export async function searchHybrid(ctx: SearchContext, p: HybridParams,
+  transport: { embedQuery?: typeof embedQuery } = {}): Promise<SearchOutcome> {
   const mode = p.mode ?? 'hybrid';
   const topK = p.topK ?? 120;
   const limit = p.limit ?? 10;
@@ -310,7 +321,7 @@ export async function searchHybrid(ctx: SearchContext, p: HybridParams): Promise
   let vecHits: { window_id: number; sim: number }[] = [];
   if (ix && mode !== 'bm25') {
     try {
-      const q = await embedQuery(ctx.embedCfg, p.query);
+      const q = await (transport.embedQuery ?? embedQuery)(ctx.embedCfg, p.query);
       const allowed = allowedBitmap(db, p, ix.maxWindowId);
       vecHits = topKCosine(ix, q, topK, allowed, p.minSim ?? DEFAULT_MIN_SIM);
     } catch (e) {
