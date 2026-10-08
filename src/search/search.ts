@@ -280,7 +280,8 @@ export interface SearchOutcome {
   strongCount: number;
 }
 
-export async function searchHybrid(ctx: SearchContext, p: HybridParams): Promise<SearchOutcome> {
+export async function searchHybrid(ctx: SearchContext, p: HybridParams,
+  transport: { embedQuery?: typeof embedQuery } = {}): Promise<SearchOutcome> {
   const mode = p.mode ?? 'hybrid';
   const topK = p.topK ?? 120;
   const limit = p.limit ?? 10;
@@ -310,7 +311,7 @@ export async function searchHybrid(ctx: SearchContext, p: HybridParams): Promise
   let vecHits: { window_id: number; sim: number }[] = [];
   if (ix && mode !== 'bm25') {
     try {
-      const q = await embedQuery(ctx.embedCfg, p.query);
+      const q = await (transport.embedQuery ?? embedQuery)(ctx.embedCfg, p.query);
       const allowed = allowedBitmap(db, p, ix.maxWindowId);
       vecHits = topKCosine(ix, q, topK, allowed, p.minSim ?? DEFAULT_MIN_SIM);
     } catch (e) {

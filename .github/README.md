@@ -1,24 +1,20 @@
-# CI bootstrap
+# Continuous integration
 
-`ci.yml` installs locked npm dependencies and runs the existing backend tests on
-Ubuntu for pull requests, pushes to `main`, and manual runs. Node is pinned to
-22.23.2. Tests use temporary fixture data; no production archive or API key is
-needed.
+`ci.yml` runs offline backend/desktop fixture tests on Ubuntu for PRs/main/manual
+runs. No production database, provider credentials or self-hosted runner is needed.
 
-`desktop-bootstrap.yml` is manual only. In GitHub Actions, select **Desktop
-bootstrap → Run workflow**. It runs the backend tests on macOS ARM64 and Windows
-x64, checks Node/SQLite and the runner architecture, and uploads a small JSON
-manifest retained for seven days.
+`desktop-build.yml` builds actual macOS ARM64 `.dmg` and Windows x64 NSIS `.exe`
+installers on hosted runners for PRs/main/manual runs. It bundles Node, backend
+dependencies and native macOS helpers, tests synthetic fixtures, checks the packaged
+macOS runtime/staged Windows runtime, and uploads installers with commit-specific
+artifact names plus a build manifest. It publishes no release and performs no merge.
 
-The manifest explicitly has `appBuilt: false`. There is no React/Tauri project
-in this repository yet, so this workflow does not generate an app, installer,
-or release. Add the desktop packaging commands before the manifest/upload steps
-when the app is ready; then replace the manifest artifact with the actual bundle.
-Signing and release publication should use a separate, explicitly invoked
-workflow. The current workflows have read-only repository permissions and use
-no signing credentials.
+`desktop-update-packages.yml` is manual and skips without the repository's approved
+updater public key. It requires a separately approved protected private-key secret
+to produce signed updater artifacts. It creates no credentials and publishes nothing.
+See [desktop build and update setup](../desktop/README.md).
 
-CI runs when this change opens or updates a pull request. Merge the workflows
-into `main` before using the manual workflow's **Run workflow** button: GitHub
-requires a dispatchable workflow to exist on the repository's default branch.
-No secrets or self-hosted runners need to be configured for this bootstrap.
+No manual configuration is required for default unsigned installer builds. Before
+publishing updates, configure the approved signing variables/secrets and release feed.
+Live FDA, Windows collection, provider transcription, installer UX and update lifecycle
+validation use disposable VMs and remain separate from fixture CI.

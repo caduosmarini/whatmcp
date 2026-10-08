@@ -1,0 +1,12 @@
+export type Page='search'|'conversations'|'activity'|'settings';
+export type Thread={id:string;title:string|null;kind:string;msg_count:number;first_ts:number;last_ts:number};
+export type Person={sender_id:string;display_name:string|null};
+export type Message={id:string;ts:number;sender_name:string;text:string|null;kind:string;is_from_me:number;transcription_text?:string|null;transcription_status?:string;transcription_stale?:boolean;index_pending?:boolean};
+export type Hit={window_id:number;thread_id:string;thread_title:string|null;start_ts:number;end_ts:number;text:string;speakers:string;bm25_rank:number|null;vec_rank:number|null;strong:boolean};
+export type Job={id:string;kind:string;messageId?:string;retry?:boolean;state:string;startedAt:number;finishedAt?:number;detail:string;done?:number;total?:number};
+export type Overview={messages:number;threads:number;windows:number;embedded:number;last_sync_at:number;pendingSegments:number;affectedMessages:number;audioPending:number;audioAvailable:number;audioUnavailable:number;jobs:Job[];captureExpiresAt:number;platform:string;demo:boolean;profile:string;keyConfigured:boolean;transcriptionModel:string|null};
+export type AudioRow=Message&{thread_id:string;thread_title:string;availability:string;done:number;duration_s:number|null};
+export const number=(n:number)=>n.toLocaleString('pt-BR');
+export const date=(ts:number)=>new Date(ts*1000).toLocaleDateString('pt-BR',{day:'numeric',month:'short',year:'numeric'});
+export const time=(ts:number)=>new Date(ts*1000).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
+export const jobName:Record<string,string>={sync:'Sincronização',transcribe:'Transcrição',embed:'Busca por significado','install-model':'Modelo de transcrição'};

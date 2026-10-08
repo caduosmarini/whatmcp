@@ -1,0 +1,94 @@
+name: Desktop installers
+
+'on':
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.target }} installer
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: macos-arm64
+            bundles: app,dmg
+          - os: windows-2025
+            target: windows-x64
+            bundles: nsis
+    env:
+      WHATMCP_HOME: ${{ github.workspace }}/.ci-sandbox/data
+      OPENAI_API_KEY: ''
+      CARGO_HOME: ${{ github.workspace }}/.ci-sandbox/cargo
+      npm_config_cache: ${{ github.workspace }}/.ci-sandbox/npm
+      # No paid OS signing or persistent updater credentials in PR builds.
+      TAURI_UPDATER_PUBLIC_KEY: ''
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.23.2
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - name: Isolate test HOME and temporary data
+        shell: bash
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.ci-sandbox/home" "$GITHUB_WORKSPACE/.ci-sandbox/tmp"
+          echo "RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.rustup}" >> "$GITHUB_ENV"
+          echo "HOME=$GITHUB_WORKSPACE/.ci-sandbox/home" >> "$GITHUB_ENV"
+          echo "USERPROFILE=$GITHUB_WORKSPACE/.ci-sandbox/home" >> "$GITHUB_ENV"
+          echo "TMPDIR=$GITHUB_WORKSPACE/.ci-sandbox/tmp" >> "$GITHUB_ENV"
+          echo "TMP=$GITHUB_WORKSPACE/.ci-sandbox/tmp" >> "$GITHUB_ENV"
+          echo "TEMP=$GITHUB_WORKSPACE/.ci-sandbox/tmp" >> "$GITHUB_ENV"
+      - name: Install locked dependencies
+        shell: bash
+        run: |
+          npm ci
+          npm ci --prefix desktop
+      - name: Use Xcode with the macOS 26 Speech SDK
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          XCODE_PATH=$(find /Applications -maxdepth 1 -name 'Xcode_26*.app' | sort -V | tail -1)
+          test -n "$XCODE_PATH"
+          sudo xcode-select --switch "$XCODE_PATH/Contents/Developer"
+      - name: Bundle runtime and native helpers
+        run: npm run prepare:runtime --prefix desktop
+      - name: Enable synthetic collector tests
+        if: runner.os == 'macOS'
+        shell: bash
+        run: echo "WHATMCP_TEST_COLLECTOR=$GITHUB_WORKSPACE/desktop/src-tauri/resources/bin/macos-collector" >> "$GITHUB_ENV"
+      - name: Backend and desktop fixture tests
+        run: npm test -- --test-concurrency=2
+      - name: Build installable application
+        working-directory: desktop
+        run: npm run tauri -- build --bundles ${{ matrix.bundles }}
+      - name: Verify packaged or staged archive runtime
+        run: node --experimental-sqlite --experimental-strip-types --no-warnings desktop/scripts/verify-bundle.mjs
+      - name: Upload installer and build evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: whatmcp-${{ matrix.target }}-${{ github.sha }}
+          path: |
+            desktop/src-tauri/target/release/bundle/**/*.dmg
+            desktop/src-tauri/target/release/bundle/**/*.exe
+            artifacts/desktop-build.json
+          if-no-files-found: error
+          retention-days: 14

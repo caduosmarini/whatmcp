@@ -35,3 +35,11 @@ tls-runtime.json
 # Generated CI scaffolding outputs
 artifacts/
 .ci-sandbox/
+desktop/node_modules/
+desktop/dist/
+desktop/src-tauri/target/
+desktop/src-tauri/resources/runtime/
+desktop/src-tauri/resources/bin/
+desktop/src-tauri/icons/
+*.key.pub
+desktop/src-tauri/gen/

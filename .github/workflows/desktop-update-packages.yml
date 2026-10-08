@@ -1,0 +1,64 @@
+name: Desktop update packages
+
+'on':
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # Deliberately disabled until the owner configures an already approved key.
+    if: vars.TAURI_UPDATER_PUBLIC_KEY != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            bundles: app,dmg
+          - os: windows-2025
+            bundles: nsis
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      WHATMCP_HOME: ${{ github.workspace }}/.ci-sandbox/data
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.23.2
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - name: Require the configured private key
+        shell: bash
+        run: test -n "$TAURI_SIGNING_PRIVATE_KEY"
+      - name: Install dependencies
+        shell: bash
+        run: |
+          npm ci
+          npm ci --prefix desktop
+      - name: Select macOS 26 SDK
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          XCODE_PATH=$(find /Applications -maxdepth 1 -name 'Xcode_26*.app' | sort -V | tail -1)
+          test -n "$XCODE_PATH"
+          sudo xcode-select --switch "$XCODE_PATH/Contents/Developer"
+      - name: Bundle runtime
+        run: npm run prepare:runtime --prefix desktop
+      - name: Build signed updater artifacts (no publishing)
+        working-directory: desktop
+        run: npm run tauri -- build --bundles ${{ matrix.bundles }} --config src-tauri/tauri.updater.conf.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: whatmcp-update-${{ runner.os }}-${{ github.sha }}
+          path: |
+            desktop/src-tauri/target/release/bundle/**/*.tar.gz
+            desktop/src-tauri/target/release/bundle/**/*.exe
+            desktop/src-tauri/target/release/bundle/**/*.sig
+          if-no-files-found: error
+          retention-days: 14
