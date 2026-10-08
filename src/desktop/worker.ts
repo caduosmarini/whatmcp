@@ -28,8 +28,8 @@ try{
       const collector=process.env.WHATMCP_COLLECTOR;
       if(!collector)throw new Error('macOS collector is not bundled');
       const output=join(DATA_DIR,'captures',randomUUID());mkdirSync(output,{recursive:true,mode:0o700});
-      const capture=JSON.parse(execFileSync(collector,[],{input:JSON.stringify({sourceHome:process.env.WHATMCP_USER_HOME,output,mediaOutput:join(DATA_DIR,'media','macos'),expiresAt:request.expiresAt}),encoding:'utf8',timeout:Math.max(1,request.expiresAt-Date.now()),maxBuffer:65536}));
-      try{say(runIndex(cfg.store,{chatstorage:'',snapshotPath:capture.snapshot,mediaSourceId:'macos',onProgress:say}));}finally{rmSync(output,{recursive:true,force:true});}
+      try{const capture=JSON.parse(execFileSync(collector,[],{input:JSON.stringify({sourceHome:process.env.WHATMCP_USER_HOME,output,mediaOutput:join(DATA_DIR,'media','macos'),expiresAt:request.expiresAt}),encoding:'utf8',timeout:Math.max(1,request.expiresAt-Date.now()),maxBuffer:65536}));
+        say(runIndex(cfg.store,{chatstorage:'',snapshotPath:capture.snapshot,mediaSourceId:'macos',onProgress:say}));}finally{rmSync(output,{recursive:true,force:true});}
     }else throw new Error('Live collection is supported on macOS and Windows');
     if(cfg.transcriptionAutoAfterImport&&cfg.transcriptionModel){say('Transcribing after import');if(demo)say(await transcribeDemo(cfg,undefined,false,say));else say(await runTranscription(cfg,{limit:cfg.transcriptionBatchSize,onProgress:say}));}
   }else if(request.kind==='transcribe'){

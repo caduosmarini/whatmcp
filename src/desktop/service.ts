@@ -9,6 +9,7 @@ import { searchHybrid, listThreads, listPeople, getConversation, listMessageFeed
 import { mediaPath } from '../transcription/media.ts';
 import { configSnapshot, saveSettings } from './settings.ts';
 import { seedDemo, demoVector } from './demo.ts';
+import { closeStores } from '../store.ts';
 
 const query=z.object({query:z.string().trim().min(1).max(2000),mode:z.enum(['hybrid','bm25','vector']).default('hybrid'),thread:z.string().max(300).optional(),sender:z.string().max(300).optional(),after:z.number().int().optional(),before:z.number().int().optional(),kind:z.enum(['all','text','audio']).default('all'),limit:z.number().int().min(1).max(100).default(40)}).strict();
 type Job={id:string;kind:string;messageId?:string;retry?:boolean;state:'running'|'done'|'failed'|'cancelled'|'interrupted';startedAt:number;finishedAt?:number;detail:string;done?:number;total?:number;};
@@ -70,7 +71,7 @@ export class DesktopService {
       case 'revoke-capture':this.leaseEnd=0;this.leaseDeadline=0;if(this.active&&this.jobs[0]?.kind==='sync')await this.cancel();return {expiresAt:0};
       case 'start-job':return this.startJob(p);
       case 'cancel-job':return this.cancel();
-      case 'shutdown':await this.cancel();return {ok:true};
+      case 'shutdown':await this.cancel();closeStores();return {ok:true};
       default:throw new Error('Unknown desktop command');
     }
   }

@@ -30,6 +30,7 @@ export interface Store {
 }
 
 let current: Store | null = null;
+const retired = new Map<DB, ReturnType<typeof setTimeout>>();
 interface VectorCache { loaded: boolean; value: VectorIndex | null }
 const vectorCaches = new WeakMap<Store, VectorCache>();
 
@@ -91,9 +92,11 @@ export function getStore(path: string, modelTag: string): Store {
   // last descriptor closes, so a request still holding `old` goes on reading a
   // coherent database while new requests get the new one.
   if (old) {
-    setTimeout(() => {
+    const timer = setTimeout(() => {
+      retired.delete(old.db);
       try { old.db.close(); } catch { /* already gone */ }
     }, 30_000).unref();
+    retired.set(old.db, timer);
   }
   return next;
 }
@@ -108,4 +111,15 @@ export function tryGetStore(path: string, modelTag: string): Store | null {
 export function invalidate(): void {
   // Force a fresh handle while retaining the matrix until generation is checked.
   if(current)current.key='';
+}
+
+/** Shutdown only, after all requests finish. Windows cannot unlink open DB files. */
+export function closeStores(): void {
+  if (current) { try { current.db.close(); } catch { /* already closed */ } }
+  current = null;
+  for (const [db, timer] of retired) {
+    clearTimeout(timer);
+    try { db.close(); } catch { /* already closed */ }
+  }
+  retired.clear();
 }
