@@ -27,6 +27,7 @@ test('desktop archive commands and jobs work entirely with synthetic fixtures',a
     assert.equal((await request('execute',{command:'anything'})).ok,false);
     assert.equal((await request('search',{query:'x',limit:1000})).ok,false);
     const text=await api('search',{query:'pagamento',mode:'bm25'});assert.ok(text.hits.length>0);
+    for(const mode of ['bm25','vector']){const filtered=await api('search',{query:'pagamento',mode,threadId:'aurora',senderId:'me'});assert.ok(filtered.hits.length>0);assert.ok(filtered.hits.every((h:any)=>h.thread_id==='aurora'));assert.deepEqual((await api('search',{query:'pagamento',mode,senderId:'missing-person'})).hits,[]);assert.deepEqual((await api('search',{query:'pagamento',mode,threadId:'missing-thread'})).hits,[]);}
     const semantic=await api('search',{query:'dinheiro',mode:'vector'});assert.ok(semantic.hits.length>0);assert.equal(semantic.demoSemantic,true);assert.ok(semantic.hits.some((h:any)=>!h.text.includes('dinheiro')));
     const first=await api('feed',{thread_id:'aurora',limit:2});assert.equal(first.messages.length,2);assert.equal(first.hasMore,true);const tail=first.messages.at(-1);const next=await api('feed',{thread_id:'aurora',limit:2,last:{ts:tail.ts,id:tail.id}});assert.equal(next.messages.some((m:any)=>m.id===tail.id),false);
     assert.ok((await api('media',{id:'demo-2'})).base64);assert.equal((await request('media',{id:'demo-13'})).ok,false);
