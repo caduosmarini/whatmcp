@@ -1,11 +1,14 @@
-import { cpSync,copyFileSync,mkdirSync,existsSync,chmodSync } from 'node:fs';
+import { cpSync,copyFileSync,mkdirSync,existsSync,chmodSync,rmSync } from 'node:fs';
 import { resolve,join,dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
 const desktop=resolve(import.meta.dirname,'..'),root=resolve(desktop,'..'),resources=join(desktop,'src-tauri/resources');
 mkdirSync(join(resources,'runtime'),{recursive:true});mkdirSync(join(resources,'bin'),{recursive:true});
 for(const entry of ['src','scripts','package.json','package-lock.json'])cpSync(join(root,entry),join(resources,'runtime',entry),{recursive:true});
 // Dependencies and the exact Node 22 executable travel with the application.
-cpSync(join(root,'node_modules'),join(resources,'runtime/node_modules'),{recursive:true});
+// Node's cpSync otherwise rewrites .bin symlinks to absolute checkout paths.
+// Recreate only this generated dependency copy and dereference links for packaging.
+rmSync(join(resources,'runtime/node_modules'),{recursive:true,force:true});
+cpSync(join(root,'node_modules'),join(resources,'runtime/node_modules'),{recursive:true,dereference:true});
 copyFileSync(process.execPath,join(resources,'bin',process.platform==='win32'?'node.exe':'node'));
 const nodeLicense=join(dirname(process.execPath),process.platform==='win32'?'LICENSE':'../LICENSE');
 if(existsSync(nodeLicense))copyFileSync(nodeLicense,join(resources,'bin/Node-LICENSE.txt'));

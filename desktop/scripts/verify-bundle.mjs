@@ -1,4 +1,4 @@
-import { existsSync,mkdirSync,writeFileSync,mkdtempSync } from 'node:fs';
+import { existsSync,mkdirSync,writeFileSync,mkdtempSync,readdirSync,realpathSync } from 'node:fs';
 import { resolve,join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
@@ -6,6 +6,7 @@ const root=resolve(import.meta.dirname,'../..');
 const app=process.env.WHATMCP_TEST_APP??join(root,'desktop/src-tauri/target/release/bundle/macos/WhatMCP.app');
 const bundle=process.platform==='darwin'?join(app,'Contents/Resources'):join(root,'desktop/src-tauri/resources');
 const node=join(bundle,'bin',process.platform==='win32'?'node.exe':'node');assert.ok(existsSync(node));
+function validateLinks(dir){for(const entry of readdirSync(dir,{withFileTypes:true})){const path=join(dir,entry.name);if(entry.isSymbolicLink())assert.ok(realpathSync(path).startsWith(realpathSync(bundle)+ (process.platform==='win32'?'\\':'/')),'Bundle contains an external symlink');else if(entry.isDirectory())validateLinks(path)}}validateLinks(bundle);
 const isolated=mkdtempSync(join(root,'.ci-sandbox/bundle-smoke-'));mkdirSync(join(isolated,'home'));mkdirSync(join(isolated,'tmp'));
 const result=execFileSync(node,['--experimental-sqlite','--experimental-strip-types','--no-warnings',join(bundle,'runtime/src/desktop/server.ts')],{input:'{"method":"overview"}\n{"method":"shutdown"}\n',encoding:'utf8',timeout:30_000,cwd:isolated,env:{PATH:process.env.PATH,HOME:join(isolated,'home'),USERPROFILE:join(isolated,'home'),TMPDIR:join(isolated,'tmp'),WHATMCP_HOME:join(isolated,'profile'),WHATMCP_DESKTOP_MODE:'demo'}});
 const replies=result.trim().split('\n').map(s=>JSON.parse(s));assert.equal(replies[0].ok,true,replies[0].error);assert.equal(replies[0].result.messages,14);
