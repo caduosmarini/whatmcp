@@ -51,7 +51,9 @@ jobs:
         shell: bash
         run: |
           mkdir -p "$GITHUB_WORKSPACE/.ci-sandbox/home" "$GITHUB_WORKSPACE/.ci-sandbox/tmp"
-          echo "RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.rustup}" >> "$GITHUB_ENV"
+          RUSTUP_DIRECTORY="${RUSTUP_HOME:-$HOME/.rustup}"
+          if [ "$RUNNER_OS" = Windows ]; then RUSTUP_DIRECTORY=$(cygpath -w "$RUSTUP_DIRECTORY"); fi
+          echo "RUSTUP_HOME=$RUSTUP_DIRECTORY" >> "$GITHUB_ENV"
           echo "HOME=$GITHUB_WORKSPACE/.ci-sandbox/home" >> "$GITHUB_ENV"
           echo "USERPROFILE=$GITHUB_WORKSPACE/.ci-sandbox/home" >> "$GITHUB_ENV"
           echo "TMPDIR=$GITHUB_WORKSPACE/.ci-sandbox/tmp" >> "$GITHUB_ENV"
