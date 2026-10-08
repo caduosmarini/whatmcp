@@ -56,8 +56,8 @@ Use the WAren6 fork's preserved-copy implementation, starting at commit
 `e53aa64`. Use `3fd7f19` or newer for the quoted-reply index that avoids
 repeated full-chat scans during unification. The audio acquisition described here
 also requires the hash-based media linking and in-memory acquisition callback
-from `865b9e8` on the fork's `windows-audio-media-linking` branch, or a later
-revision containing those changes. Until merged, check out that branch explicitly.
+from [commit 865b9e8](https://github.com/caduosmarini/WAren6/commit/865b9e874965e8badbd12040622b463656c1d4ce)
+on the fork's `main`, or a later revision containing those changes.
 It refuses an incomplete preserved source instead of falling back to
 live acquisition. Upstream WAren6 remains available at
 https://github.com/MayukXT/WAren6. WhatMCP invokes this GPL-3.0 dependency as a
