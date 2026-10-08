@@ -1,0 +1,36 @@
+name: CI
+
+'on':
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Backend tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      # Tests use fixtures; never connect an installed WhatsApp or production archive.
+      WHATMCP_HOME: ${{ runner.temp }}/whatmcp-ci
+      OPENAI_API_KEY: ''
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.23.2
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Run existing fixture tests
+        run: npm test -- --test-concurrency=2

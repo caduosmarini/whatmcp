@@ -31,3 +31,7 @@ scripts/prepare-local-tls.py
 scripts/verify-https.mjs
 runtime-windows.json
 tls-runtime.json
+
+# Generated CI scaffolding outputs
+artifacts/
+.ci-sandbox/
