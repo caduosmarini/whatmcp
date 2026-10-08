@@ -78,7 +78,8 @@ jobs:
         shell: bash
         run: echo "WHATMCP_TEST_COLLECTOR=$GITHUB_WORKSPACE/desktop/src-tauri/resources/bin/macos-collector" >> "$GITHUB_ENV"
       - name: Backend and desktop fixture tests
-        run: npm test -- --test-concurrency=2
+        timeout-minutes: 5
+        run: npm test -- --test-concurrency=2 --test-timeout=120000
       - name: Build installable application
         working-directory: desktop
         run: npm run tauri -- build --bundles ${{ matrix.bundles }}

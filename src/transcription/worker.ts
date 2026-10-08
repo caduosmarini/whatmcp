@@ -9,7 +9,8 @@ import * as wa from '../whatsapp/source.ts';
 import { tryAcquireSyncLock } from '../sync-lock.ts';
 import { hashFile, listAudioMedia, markProjectionDirty, mediaPath,
   scanSourceMedia, upsertAudioReferences, type AudioMediaRow } from './media.ts';
-import { availableModels, transcribeSegment, TranscriptionError, canUploadDirect } from './models.ts';
+import { availableModels, transcribeSegment, TranscriptionError, canUploadDirect,
+  createLocalWhisperSession, type LocalWhisperSession } from './models.ts';
 import { prepareReadyCandidates, publishCandidates,
   reconcileProjectionModel } from './projection.ts';
 
@@ -253,12 +254,14 @@ export async function runTranscription(cfg: Config, options: {
   onProgress?: (message: string) => void;
   /** Test-only adapter; the default uses the configured real provider. */
   transcribe?: typeof transcribeSegment;
+  /** Offline session adapter; production starts one persistent local model. */
+  localSessionFactory?: typeof createLocalWhisperSession;
   convert?: typeof convertSegment;
   duration?: typeof durationSeconds;
 } = {}): Promise<TranscriptionRun> {
   const model = cfg.transcriptionModel;
   if (!model) throw new Error('Transcription is disabled; choose transcription_model first.');
-  if (!options.transcribe) {
+  if (!options.transcribe && !(model==='faster-whisper'&&options.localSessionFactory)) {
     const available = (await availableModels(cfg)).find((m) => m.model === model);
     if (!available?.available) {
       throw new Error(`${model} unavailable: ${available?.reason ?? 'unknown reason'}`);
@@ -272,6 +275,7 @@ export async function runTranscription(cfg: Config, options: {
   };
   const locale = cfg.transcriptionDefaultLanguage ?? 'pt-BR';
   const say = options.onProgress ?? (() => {});
+  let localSession:LocalWhisperSession|undefined;
   try {
     reconcileProjectionModel(db, model, locale);
     if (options.retryErrors) db.prepare(`UPDATE audio_transcripts
@@ -356,8 +360,19 @@ export async function runTranscription(cfg: Config, options: {
             input=join(tempDir,`part-${n}.wav`);
             await (options.convert ?? convertSegment)(cfg,source,n,input,ranges[n]);
           }
-          const text = await (options.transcribe ?? transcribeSegment)(
-            model,locale,input,cfg.openaiKey,{prompt:texts.slice(-1).join(' ').slice(-1000)});
+          let text:string;
+          if(model==='faster-whisper'&&!options.transcribe) {
+            if(!localSession) {
+              localSession=await (options.localSessionFactory??createLocalWhisperSession)(cfg,locale);
+              say(`local Whisper model ready (${localSession.device})`);
+            }
+            text=await localSession.transcribe(input);
+          } else {
+            text=await (options.transcribe ?? transcribeSegment)(
+              model,locale,input,cfg.openaiKey,{prompt:texts.slice(-1).join(' ').slice(-1000),
+                localPythonPath:cfg.transcriptionLocalPythonPath,
+                localModelPath:cfg.transcriptionLocalModelPath});
+          }
           db.prepare(`
             INSERT OR REPLACE INTO transcript_segments
               (message_id, audio_sha256, model, model_revision, locale, segment_no, text)
@@ -416,7 +431,7 @@ export async function runTranscription(cfg: Config, options: {
     flush();
     return result;
   } finally {
-    db.close();
-    release();
+    try {await localSession?.close();}
+    finally {db.close();release();}
   }
 }

@@ -142,7 +142,7 @@ export async function runSetup(): Promise<void> {
     } else {
       cfg = await promptKey(askSecret);
     }
-    if (!cfg.openaiKey) console.log(yellow('  Keyword search remains available.' + (process.platform === 'darwin' ? ' Local Apple transcription is also available.' : '')));
+    if (!cfg.openaiKey) console.log(yellow('  Keyword search remains available. Local transcription does not require an API key.'));
 
     rule('3. Audio transcription');
     const savedModel = readFileConfig().transcription_model;
@@ -186,6 +186,9 @@ export async function runSetup(): Promise<void> {
         if (model === 'gpt-transcribe') {
           console.log('  Audio will be uploaded to OpenAI. The resulting text will also be sent');
           console.log('  to OpenAI if you later create text embeddings.');
+        } else if (model === 'faster-whisper') {
+          console.log('  Audio is transcribed on this computer with the installed Whisper model.');
+          console.log('  Transcript text is sent to OpenAI only if you create text embeddings.');
         }
         writeFileConfig({ transcription_model: model });
       }

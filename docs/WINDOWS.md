@@ -48,13 +48,17 @@ imports its validated `unified_whatsapp.db`. No WAren6 code is bundled here.
 
 `npm run sync` uses `scripts/sync-hotcopy-windows.ps1` to copy LocalState,
 WebView2 IndexedDB and Local Storage while WhatsApp remains open. It then runs
-WAren6 offline against that copy with `-f -n -NoArchive -PreservedCopy`, validates
+WAren6 offline against that copy with `-f -n -m -NoArchive -PreservedCopy`, validates
 the new case and imports its `unified_whatsapp.db`. Manual sync also embeds new
 windows. There is no close/reopen step or confirmation dialog.
 
 Use the WAren6 fork's preserved-copy implementation, starting at commit
 `e53aa64`. Use `3fd7f19` or newer for the quoted-reply index that avoids
-repeated full-chat scans during unification. It refuses an incomplete preserved source instead of falling back to
+repeated full-chat scans during unification. The audio acquisition described here
+also requires the hash-based media linking and in-memory acquisition callback
+from [commit 865b9e8](https://github.com/caduosmarini/WAren6/commit/865b9e874965e8badbd12040622b463656c1d4ce)
+on the fork's `main`, or a later revision containing those changes.
+It refuses an incomplete preserved source instead of falling back to
 live acquisition. Upstream WAren6 remains available at
 https://github.com/MayukXT/WAren6. WhatMCP invokes this GPL-3.0 dependency as a
 separate process; its implementation is not bundled in this MIT repository.
@@ -80,15 +84,26 @@ cannot remove linked voice messages.
 compatible ChatStorage import. `doctor` validates the selected source. Native
 acquisition preserves known audio formats from transfer folders, in addition to
 the WebView database evidence. Images and documents are not imported into the
-media/transcription archive. Only audio actually present locally and attributed
-unambiguously can be transcribed; extraction does not retrieve missing audio
-from WhatsApp servers.
+media/transcription archive. The media index links voice messages without filenames
+by their SHA-256. The acquisition helper recovers exact matching ciphertext from
+the Windows HTTP cache and can fetch missing audio from verified WhatsApp HTTPS
+endpoints. It authenticates and checks the plaintext hash and size before import;
+unavailable or mismatched audio leaves the original message intact. Private media
+keys remain in memory and are passed only to the fixed local helper.
 
 The audio importer verifies bytes against the case hash and size, preserves
 stable message IDs, and discovers late media even below the message watermark.
 It retains existing transcripts and searchable text while replacement audio is
-pending. See [Audio transcription](AUDIO.md) for opt-in `gpt-transcribe`, one
+pending. See [Audio transcription](AUDIO.md) for local `faster-whisper` or opt-in `gpt-transcribe`, one
 default language (`pt-BR`), decoder paths, costs and manual processing.
+
+For local transcription, install the pinned dependencies from
+`src/transcription/local-whisper-requirements.txt` in a Python environment and
+set `transcription_local_python_path` and `transcription_local_model_path` to
+existing paths. `npm run wa -- transcribe-models` checks the runtime and cached
+model without downloading model files. The account running the scheduled task
+or service needs read and execute access to Python and read access to every
+model file, including the targets of any cache symlinks.
 
 ## Scheduled collection
 
@@ -150,3 +165,11 @@ is separate and opt-in. These checks do not exercise a live encrypted WhatsApp
 package, a real WAren6 acquisition, Windows account credentials, or a paid audio
 API request. Validate one real collection under the intended Windows service or
 interactive account before relying on that environment.
+
+Run the cache and local Whisper protocol tests separately; they use synthetic
+data and do not require the Whisper model or upload audio:
+
+```powershell
+python test/windows-cache-audio.test.py
+python test/local-whisper.test.py
+```

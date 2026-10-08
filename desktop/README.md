@@ -69,7 +69,9 @@ permissions remain user actions. Real Apple/OpenAI transcription is not tested h
 End users do not need Node/Rust/Xcode. macOS 13+ supports archive browsing; Apple
 transcription requires 26+. Windows uses the existing external **WAren6** adapter;
 its configured installation and a supported local WhatsApp source are required for
-live sync. Audio conversion needs **FFmpeg/FFprobe** installed or absolute executable
+live sync. Local Whisper uses the backend's existing faster-whisper adapter: select an already
+installed Python environment and local CTranslate2 model in Settings. Nothing is
+installed or downloaded automatically. Audio conversion needs **FFmpeg/FFprobe** installed or absolute executable
 paths selected in Settings. These tools are not installed automatically or bundled
 by this PR. GPT transcription/real semantic search need an OpenAI key, may incur
 provider costs and transmit the corresponding audio/text. The local key is stored

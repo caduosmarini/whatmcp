@@ -18,9 +18,9 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync } from 'n
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-export type TranscriptionModel = 'apple-speech' | 'apple-dictation' | 'gpt-transcribe';
+export type TranscriptionModel = 'apple-speech' | 'apple-dictation' | 'faster-whisper' | 'gpt-transcribe';
 export const TRANSCRIPTION_MODELS: TranscriptionModel[] =
-  ['apple-speech', 'apple-dictation', 'gpt-transcribe'];
+  ['apple-speech', 'apple-dictation', 'faster-whisper', 'gpt-transcribe'];
 
 export const DATA_DIR = process.env.WHATMCP_HOME ?? join(homedir(), '.whatmcp');
 export const CONFIG_PATH = join(DATA_DIR, 'config.json');
@@ -55,6 +55,10 @@ export interface FileConfig {
   min_sim?: number;
   strong_sim?: number;
   transcription_model?: TranscriptionModel | null;
+  /** Local Python environment with faster-whisper installed; never downloaded on use. */
+  transcription_local_python_path?: string;
+  /** Existing CTranslate2 Whisper model directory, loaded with network disabled. */
+  transcription_local_model_path?: string;
   /** Process pending audio automatically after imports; opt-in. */
   transcription_auto_after_import?: boolean;
   transcription_concurrency?: number;
@@ -135,6 +139,8 @@ export interface Config {
   syncIntervalHours: number;
   syncTimeoutMinutes?: number;
   transcriptionModel?: TranscriptionModel | null;
+  transcriptionLocalPythonPath?: string;
+  transcriptionLocalModelPath?: string;
   transcriptionAutoAfterImport?: boolean;
   transcriptionConcurrency?: number;
   transcriptionBatchSize?: number;
@@ -186,6 +192,11 @@ export function loadConfig(): Config {
   if (f.transcription_model != null && !TRANSCRIPTION_MODELS.includes(f.transcription_model)) {
     throw new Error(`Unknown transcription_model: ${f.transcription_model}`);
   }
+  for (const name of ['transcription_local_python_path','transcription_local_model_path'] as const) {
+    if(f[name] !== undefined && (typeof f[name] !== 'string' || !f[name]!.trim())) {
+      throw new Error(`${name} must be a nonempty path`);
+    }
+  }
   const concurrency = f.transcription_concurrency ?? 2;
   if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 4) {
     throw new Error('transcription_concurrency must be an integer between 1 and 4');
@@ -212,6 +223,8 @@ export function loadConfig(): Config {
     syncIntervalHours: Number(f.sync_interval_hours ?? 0),
     syncTimeoutMinutes: resolveSyncTimeoutMinutes(f.sync_timeout_minutes, sourceType),
     transcriptionModel: f.transcription_model ?? null,
+    transcriptionLocalPythonPath: process.env.WHATMCP_LOCAL_PYTHON_PATH ?? f.transcription_local_python_path,
+    transcriptionLocalModelPath: process.env.WHATMCP_LOCAL_MODEL_PATH ?? f.transcription_local_model_path,
     transcriptionAutoAfterImport: f.transcription_auto_after_import === true,
     transcriptionConcurrency: concurrency,
     transcriptionBatchSize: resolveTranscriptionBatchSize(f.transcription_batch_size),

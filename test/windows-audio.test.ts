@@ -20,7 +20,7 @@ function fixture() {
   const add=(id:string, path:string|null, filename=id+'.ogg', sha?:string)=>{
     const bytes=Buffer.from('synthetic audio '+id);
     if (path && !path.startsWith('../')) writeFileSync(join(caseDir,path),bytes);
-    src.prepare('INSERT INTO messages VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+    src.prepare('INSERT INTO messages(msg_id,chat_jid,chat_name,sender_jid,sender_name,from_me,timestamp,text,is_group,msg_type,media_filename,media_case_path,media_sha256,media_size) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
       .run(id,'chat','Chat','sender','Ana',0,1700000000,null,0,'ptt',filename,path,
         sha??createHash('sha256').update(bytes).digest('hex'),bytes.length);
   };
@@ -89,4 +89,19 @@ test('audio outside the selected import and durable history is not copied or has
     assert.equal(r.scanned,0);assert.equal(r.audioReferenced,0);assert.equal(r.audioRejected,0);
     assert.equal(existsSync(f.mediaRoot),false);
   }finally{f.src.close();rmSync(f.dir,{recursive:true,force:true});}
+});
+
+test('message content hash links nameless and forwarded audio while rejecting a wrong identity hash',()=>{
+  const f=fixture();
+  try {
+    f.src.exec('ALTER TABLE messages ADD COLUMN media_filehash TEXT');
+    f.add('nameless','voice.ogg');
+    f.src.exec("UPDATE messages SET media_filename=NULL,media_filehash=media_sha256");
+    let r=importWindowsUnified(f.archive,f.source,{full:true,mediaRoot:f.mediaRoot});
+    assert.equal(r.audioReferenced,1);
+    f.add('bad-identity','bad.ogg');
+    f.src.prepare("UPDATE messages SET media_filehash=? WHERE msg_id='bad-identity'").run('a'.repeat(64));
+    r=importWindowsUnified(f.archive,f.source,{full:true,mediaRoot:f.mediaRoot});
+    assert.equal(r.audioReferenced,1);assert.equal(r.audioRejected,1);
+  } finally {f.src.close();rmSync(f.dir,{recursive:true,force:true});}
 });

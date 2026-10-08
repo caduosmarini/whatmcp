@@ -36,7 +36,22 @@ $hasMutex = $false
 
 function Write-RunLog([string]$message) {
     $line = "$(Get-Date -Format o) $message"
-    Add-Content -LiteralPath $log -Value $line -Encoding UTF8
+    # A reader or antivirus can briefly lock the log. Diagnostic logging must
+    # not turn a completed, validated import into a failed synchronization.
+    for ($attempt = 0; $attempt -lt 10; $attempt++) {
+        try {
+            $sharing = [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete
+            $stream = [IO.FileStream]::new($log, [IO.FileMode]::Append, [IO.FileAccess]::Write, $sharing)
+            try {
+                $writer = [IO.StreamWriter]::new($stream, [Text.UTF8Encoding]::new($false))
+                try { $writer.WriteLine($line); $writer.Flush() } finally { $writer.Dispose() }
+            } finally { $stream.Dispose() }
+            break
+        } catch [IO.IOException] {
+            if ($attempt -eq 9) { Write-Warning 'Run log is locked; continuing with synchronization output' }
+            else { Start-Sleep -Milliseconds 100 }
+        }
+    }
     Write-Output $line
 }
 
@@ -133,9 +148,21 @@ try {
     New-Item -ItemType Directory -Path $caseOutput -Force | Out-Null
     Write-OwnedMarker $caseOutput 'created'
     $extractorLog = Join-Path $logs "waren6-$runId.log"
+    $env:WHATMCP_HOME = $data
+    $env:WHATMCP_AUDIO_ACQUISITION_ENABLED = '0'
+    $audioConfigPath = Join-Path $data 'config.json'
+    if (Test-Path -LiteralPath $audioConfigPath) {
+        $audioConfig = Get-Content -Raw -LiteralPath $audioConfigPath | ConvertFrom-Json
+        if ($audioConfig.transcription_auto_after_import -and $audioConfig.transcription_model) {
+            $env:WHATMCP_AUDIO_ACQUISITION_ENABLED = '1'
+        }
+    }
+    $env:WHATMCP_AUDIO_CACHE_PATH = Join-Path $source 'LocalCache\EBWebView\Default\Cache\Cache_Data'
+    $env:WHATMCP_AUDIO_CACHE_PYTHON = if ($PythonPath) { $PythonPath } else { 'python.exe' }
+    $env:WHATMCP_AUDIO_CACHE_VENDOR = Join-Path (Split-Path $waren6 -Parent) 'vendor'
     Write-RunLog 'Starting WAren6 on copied evidence; WhatsApp remains open'
     & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $waren6 `
-        -f -n -NoArchive -KeepCaseDirectoryAfterArchive -PreservedCopy `
+        -f -n -m -NoArchive -KeepCaseDirectoryAfterArchive -PreservedCopy `
         -w (Join-Path $run 'LocalState') -d $caseOutput -s *> $extractorLog
     $extractorExit = $LASTEXITCODE
     if ($extractorExit -ne 0) { throw "WAren6 exit=$extractorExit; see $extractorLog" }
@@ -153,6 +180,7 @@ try {
     if ($report.status -ne 'ok' -or @($report.errors).Count -gt 0) {
         throw "WAren6 validation failed; archive unchanged; see $reportPath"
     }
+
     if (Test-Path -LiteralPath $lastSuccessPath) {
         $previous = Get-Content -Raw -LiteralPath $lastSuccessPath | ConvertFrom-Json
         $delta = [long]$metrics.messages - [long]$previous.messages
