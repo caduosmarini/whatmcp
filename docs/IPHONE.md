@@ -9,6 +9,10 @@ The extraction steps below use Finder and a macOS shell. The prepared SQLite fil
 can then be imported on Windows or macOS with the [file import commands](IMPORT.md).
 The workflow is documented in [issue #2](https://github.com/pedroschott/whatmcp/issues/2).
 
+This is the current manual workflow. A future desktop import flow is described
+in the [iPhone backup wizard proposal](proposals/iphone-backup-import-wizard.md);
+that feature is not implemented in the app yet.
+
 ## 1. Finish the device backup
 
 In Finder, select the iPhone and create an encrypted local backup. Keep the phone
