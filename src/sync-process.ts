@@ -56,7 +56,7 @@ export async function runSyncProcess(
   args: string[],
   options: SyncProcessOptions = {},
 ): Promise<number> {
-  const coordinated = args.includes('sync-worker') || options.coordinationPath !== undefined;
+  const coordinated = (process.platform === 'win32' && args.includes('sync-worker')) || options.coordinationPath !== undefined;
   if (coordinated) {
     return coordinateSync(command, args, { ...options,
       coordinationIdentity: options.coordinationIdentity ?? (args.includes('sync-worker')

@@ -10,7 +10,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 for (const fail of [false, true]) {
-  test(`new CLI workers share ${fail ? 'failure' : 'success'} when started by independent parents`, async () => {
+  test(`new CLI workers share ${fail ? 'failure' : 'success'} when started by independent parents`, { skip: process.platform !== 'win32' }, async () => {
     const dir = mkdtempSync(join(tmpdir(), 'sync-worker-shared-'));
     const pending: Promise<unknown>[] = [];
     try {

@@ -432,15 +432,8 @@ switch (cmd) {
 
   case 'sync-worker': {
     const cfg = loadConfig();
-    // Separate from the supervisor coordinator: old long-lived MCP parents
-    // also start this updated worker, and new parents must not deadlock it.
-    process.exitCode = await coordinateSync(process.execPath, ['sync-worker', ...rest], {
-      coordinationPath: join(DATA_DIR, 'sync-worker-coordinator.json'),
-      coordinationIdentity: syncSourceIdentity(cfg),
-      timeoutMs: syncTimeoutMs(cfg.sourceType, cfg.syncTimeoutMinutes,
-        !!(cfg.transcriptionAutoAfterImport && cfg.transcriptionModel)),
-      onOutput: message => process.stdout.write(message),
-    }, async () => {
+    const optimizeWindowsSync = process.platform === 'win32';
+    const runWorker = async () => {
       const release = tryAcquireSyncLock();
       if (!release) {
         console.error('another sync is already running; this request was skipped');
@@ -449,11 +442,11 @@ switch (cmd) {
       try {
         const t0 = Date.now();
         console.log(bold('indexing'));
-        const reusedAcquisition = canReuseAcquisition(cfg, flag('full'));
+        const reusedAcquisition = optimizeWindowsSync && canReuseAcquisition(cfg, flag('full'));
         if (reusedAcquisition) {
           console.log(`  reusing successful acquisition (${ACQUISITION_REUSE_MS / 1000}s reuse window); processing pending work`);
         } else {
-          invalidateAcquisition();
+          if (optimizeWindowsSync) invalidateAcquisition();
           if (cfg.sourceType === 'windows-waren6') {
             const r = await runWindowsIndex(cfg, { full: flag('full'), progress: m => console.log('  ' + m) });
             console.log(`  ${r.added} new, ${r.recovered} texts recovered, ${r.windowsBuilt} windows built (${r.total} archived)`);
@@ -469,7 +462,7 @@ switch (cmd) {
                 `${r.windowsBuilt} window(s) built  (${r.totalMessages} archived)`,
             );
           }
-          try { recordAcquisition(cfg); }
+          try { if (optimizeWindowsSync) recordAcquisition(cfg); }
           catch (error) { console.error(`could not record acquisition reuse: ${String(error)}`); }
         }
         if (flag('index-only')) {
@@ -479,7 +472,7 @@ switch (cmd) {
             onEmbeddingProgress: onProgress, calibrate: calibrateIfUnset,
             skipTranscription: flag('skip-auto-transcription') });
         }
-        if (!reusedAcquisition) {
+        if (optimizeWindowsSync && !reusedAcquisition) {
           try { completeAcquisitionRun(cfg); }
           catch (error) { console.error(`could not record acquisition completion: ${String(error)}`); }
         }
@@ -488,7 +481,18 @@ switch (cmd) {
       } finally {
         release();
       }
-    });
+    };
+    // Keep macOS/Linux acquisition and lock behavior unchanged. On Windows,
+    // updated workers also coordinate requests from older long-lived parents.
+    process.exitCode = optimizeWindowsSync
+      ? await coordinateSync(process.execPath, ['sync-worker', ...rest], {
+        coordinationPath: join(DATA_DIR, 'sync-worker-coordinator.json'),
+        coordinationIdentity: syncSourceIdentity(cfg),
+        timeoutMs: syncTimeoutMs(cfg.sourceType, cfg.syncTimeoutMinutes,
+          !!(cfg.transcriptionAutoAfterImport && cfg.transcriptionModel)),
+        onOutput: message => process.stdout.write(message),
+      }, runWorker)
+      : await runWorker();
     break;
   }
 

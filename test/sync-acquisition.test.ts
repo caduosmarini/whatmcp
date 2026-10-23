@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -36,7 +36,7 @@ test('only fresh successful matching acquisitions can be reused; full always acq
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('CLI reuses acquisition but still processes pending work; full bypasses reuse', () => {
+test('CLI reuses acquisition but still processes pending work; full bypasses reuse', { skip: process.platform !== 'win32' }, () => {
   const dir = mkdtempSync(join(tmpdir(), 'sync-acquisition-cli-'));
   try {
     const store = join(dir, 'store.db');
@@ -57,5 +57,31 @@ test('CLI reuses acquisition but still processes pending work; full bypasses reu
     const full = spawnSync(process.execPath, [...flags, cli, 'sync-worker', '--full'], { env, encoding: 'utf8' });
     assert.notEqual(full.status, 0);
     assert.doesNotMatch(full.stdout, /reusing successful acquisition/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('macOS and Linux always acquire even when a recent reuse marker exists', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'sync-acquisition-nonwindows-'));
+  try {
+    const store = join(dir, 'store.db');
+    writeFileSync(store, 'fixture');
+    const env = { ...process.env, WHATMCP_HOME: dir, WHATMCP_STORE: store,
+      WHATMCP_SOURCE_TYPE: 'chatstorage', WHATMCP_CHATSTORAGE: join(dir, 'missing-source'), OPENAI_API_KEY: '' };
+    const flags = ['--experimental-sqlite', '--experimental-strip-types', '--no-warnings'];
+    const configUrl = new URL('../src/config.ts', import.meta.url).href;
+    const reuseUrl = new URL('../src/sync-acquisition.ts', import.meta.url).href;
+    execFileSync(process.execPath, [...flags, '--input-type=module', '-e',
+      `import {loadConfig} from ${JSON.stringify(configUrl)};
+       import {recordAcquisition} from ${JSON.stringify(reuseUrl)};
+       recordAcquisition(loadConfig());`], { env });
+    for (const platform of ['darwin', 'linux']) {
+      const preload = 'data:text/javascript,' + encodeURIComponent(
+        `Object.defineProperty(process, 'platform', {value: '${platform}'});`);
+      const result = spawnSync(process.execPath, [...flags, '--import', preload,
+        fileURLToPath(new URL('../src/cli.ts', import.meta.url)), 'sync-worker'], { env, encoding: 'utf8' });
+      assert.notEqual(result.status, 0, 'must attempt the missing source instead of reusing acquisition');
+      assert.doesNotMatch(result.stdout, /reusing successful acquisition/);
+      assert.equal(existsSync(join(dir, 'sync-worker-coordinator.json')), false);
+    }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
